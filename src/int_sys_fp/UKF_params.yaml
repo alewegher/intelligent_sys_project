@@ -1,0 +1,25 @@
+UKF_parameters:
+  # Distance Kalman Filter Parameters (Model-Free Approach)
+  # This filter only estimates the deterministic part of distance measurements
+  
+  # Process noise for distance measurements
+  process_noise:
+    distance_var: 0.001    # How much distances can change between samples (m²)
+    rate_var: 0.01         # Variance in distance rate of change (m²/s²)
+  
+  # Advanced filtering options
+  outlier_detection:
+    enabled: true          # Enable outlier detection using median filter
+    window_size: 5         # Number of recent measurements for outlier detection
+    threshold_mad: 3.0     # Multiple of MAD for outlier threshold
+  
+  # Adaptive filtering
+  adaptive_noise:
+    enabled: true          # Enable adaptive noise estimation
+    min_process_noise: 0.0001  # Minimum process noise
+    max_process_noise: 0.01     # Maximum process noise
+    adaptation_rate: 0.1        # How fast to adapt (0-1)
+  
+  # Filter initialization
+  initial_uncertainty: 0.1  # Initial uncertainty for each distance (m²)
+  

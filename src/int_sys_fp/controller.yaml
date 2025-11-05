@@ -1,0 +1,12 @@
+controller_params:
+    position_gains:
+      Kp_r1 : [0.6, 0.6, 0.0]   # Proportional gains for robot 1 [Kp_x, Kp_y, Kp_z]
+      Kp_r2 : [0.6, 0.6, 0.0]   # Proportional gains for robot 2 [Kp_x, Kp_y, Kp_z]
+      Kp_r3 : [0.6, 0.6, 0.0]   # Proportional gains for robot 3 [Kp_x, Kp_y, Kp_z]
+    velocity_gains:
+      Kv_r1 : [0.3, 0.3, 0.0]   # Velocity gains for robot 1 [Kv_x, Kv_y, Kv_z]
+      Kv_r2 : [0.3, 0.3, 0.0]   # Velocity gains for robot 2 [Kv_x, Kv_y, Kv_z]
+      Kv_r3 : [0.3, 0.3, 0.0]   # Velocity gains for robot 3 [Kv_x, Kv_y, Kv_z]
+    max_velocities:
+      max_vel_r : [0.22,0.22, 0.0] # maximum velocity for a turtlebot3 [m/s]
+      max_omega_r : [2.84, 2.84, 0.0] # maximum angular velocity for a turtlebot3 [rad/s]
