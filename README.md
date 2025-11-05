@@ -4,12 +4,24 @@ Didactic ROS 2 package that simulates UWB distance sensing among three TurtleBot
 
 ## What this package does
 
-- Spawns 3 TurtleBot3 (burger) robots in Gazebo at configurable positions
-- Emulates UWB distance sensors to anchors and inter-robot distances (C++)
-- Filters distances with a dedicated Kalman Filter node (Python)
-- Provides a controller node scaffold (C++) that subscribes to UWB topics
-- Ships custom message types for distances (RobotDist, AnchorDist)
-- Offers launch files to run the full stack or just the emulator
+This is a **didactic distributed estimation and control system** for multi-robot formations using UWB-based localization:
+
+1. **Simulation setup**: Spawns 3 TurtleBot3 (burger) robots in Gazebo at configurable positions
+2. **UWB emulation**: Emulates UWB distance sensors measuring:
+   - Robot-to-anchor distances (3 fixed anchors)
+   - Inter-robot distances (robot-to-robot)
+   - Configurable noise models (Gaussian or Uniform)
+3. **Distance filtering**: Kalman Filter node (Python) filters noisy UWB measurements and publishes clean distances
+4. **Trilateration-based localization**: Controller node uses filtered distances to:
+   - Compute triangle angles from distances (law of cosines)
+   - Estimate robot positions via geometric trilateration using anchor positions
+   - Calculate formation centroid from the 3 robot positions
+5. **Formation control**: Dual PD controller architecture:
+   - **Centroid tracker**: PD controller tracks a desired 2D trajectory (x,y) provided by a planner node
+   - **Formation keeper**: PD controller maintains equilateral triangle configuration (equal inter-robot distances)
+   - Final velocity commands combine both control terms
+6. **Custom messages**: Ships RobotDist and AnchorDist message types for structured distance data
+7. **Complete launch files**: Run the full stack (Gazebo + all nodes) or individual components
 
 ## Nodes and topics
 
@@ -32,9 +44,25 @@ Didactic ROS 2 package that simulates UWB distance sensing among three TurtleBot
     - `share/int_sys_fp/sensor_params.yaml`
 
 - controller_node (C++)
-  - Subscribes: `/uwb/anchor_distances`, `/uwb/robot_distances`
-  - Planned to use gains from: `share/int_sys_fp/controller.yaml`
-  - Currently contains scaffolding for future control logic
+  - Subscribes: 
+    - `/uwb/filtered_anchor_distances` — `int_sys_fp/msg/AnchorDist`
+    - `/uwb/filtered_robot_distances` — `int_sys_fp/msg/RobotDist`
+    - `/desired_trajectory` — `geometry_msgs/PoseStamped` (from planner, 2D trajectory)
+  - Publishes:
+    - `/cmd_vel` — velocity commands for robot 1
+    - `/tb3_2/cmd_vel` — velocity commands for robot 2
+    - `/tb3_3/cmd_vel` — velocity commands for robot 3
+    - `/kf_filtered_robot_pose` — estimated robot positions
+    - `/centroid_pose` — formation centroid position
+  - Control architecture:
+    1. Trilateration: computes robot positions from filtered UWB distances + anchor positions
+    2. Centroid calculation: averages the 3 robot positions
+    3. **PD Tracker**: tracks desired centroid trajectory (x,y) from planner
+    4. **PD Formation**: maintains equilateral triangle (equal inter-robot distances)
+    5. Combines both PD terms into final velocity commands for each robot
+  - Uses gains from: `share/int_sys_fp/controller.yaml`
+    - Position/velocity gains (Kp, Kv) per robot
+    - Max velocity/angular velocity limits
 
 ## Launch files
 
@@ -49,10 +77,14 @@ Didactic ROS 2 package that simulates UWB distance sensing among three TurtleBot
 
 ## Configuration files
 
-- `sensor_params.yaml` — Anchor positions, frequency, Gaussian noise defaults
-- `sensor_params_uniform.yaml` — Alternate uniform noise config
-- `UKF_params.yaml` — UKF/KF parameters (currently KF uses defaults and sensor params)
-- `controller.yaml` — Controller gains and limits (parsed by controller node in future work)
+- `sensor_params.yaml` — Anchor positions (3 fixed anchors), sensor frequency, Gaussian noise model (mean, stddev)
+- `sensor_params_uniform.yaml` — Alternate uniform noise config (min, max range)
+- `UKF_params.yaml` — Kalman Filter parameters (process noise, outlier detection)
+- `controller.yaml` — Controller gains and limits:
+  - `Kp_r1`, `Kp_r2`, `Kp_r3`: Proportional gains [x, y, z] per robot
+  - `Kv_r1`, `Kv_r2`, `Kv_r3`: Velocity gains [x, y, z] per robot
+  - `max_vel_r`: Maximum linear velocity (0.22 m/s for TurtleBot3)
+  - `max_omega_r`: Maximum angular velocity (2.84 rad/s)
 
 All configs are installed to `install/int_sys_fp/share/int_sys_fp/`.
 
@@ -136,6 +168,19 @@ ros2 topic echo /uwb/filtered_robot_distances --once
 # Covariance matrix (diagonal published as flattened matrix)
 ros2 topic echo /ukf_covariance_matrix --once
 
+# Check estimated robot positions and centroid
+ros2 topic echo /kf_filtered_robot_pose --once
+ros2 topic echo /centroid_pose --once
+
+# Monitor robot velocity commands
+ros2 topic echo /cmd_vel
+ros2 topic echo /tb3_2/cmd_vel
+ros2 topic echo /tb3_3/cmd_vel
+
+# Send a test trajectory waypoint (planner node would do this)
+ros2 topic pub --once /desired_trajectory geometry_msgs/PoseStamped \
+  "{header: {frame_id: 'map'}, pose: {position: {x: 2.0, y: 2.0, z: 0.0}}}"
+
 # Graph
 ros2 run rqt_graph rqt_graph
 ```
@@ -161,29 +206,56 @@ ros2 run rqt_graph rqt_graph
 - CMake cache mismatch (paths mention old directories)
   - Clean: `rm -rf build/int_sys_fp src/int_sys_fp/build` and rebuild.
 
+## Control architecture overview
+
+The system implements a **distributed estimation + formation control** pipeline:
+
+```
+┌─────────────────┐
+│ UWB Emulator    │ → Noisy distances (anchor + inter-robot)
+└─────────────────┘
+         ↓
+┌─────────────────┐
+│ Kalman Filter   │ → Filtered distances
+└─────────────────┘
+         ↓
+┌─────────────────────────────────────────────────┐
+│ Controller Node                                 │
+│  1. Trilateration (distances → robot positions) │
+│  2. Centroid calculation                        │
+│  3. PD Tracker (centroid → desired trajectory)  │
+│  4. PD Formation (maintain equilateral triangle)│
+│  5. Combined velocity commands                  │
+└─────────────────────────────────────────────────┘
+         ↓
+┌─────────────────┐
+│ 3 TurtleBot3    │ → Execute velocity commands
+└─────────────────┘
+```
+
 ## Project structure (high level)
 
 ```
 int_sys_fp/
   launch/
-    synchronized_system.launch.py
-    uwb_emulator.launch.py
-    uwb_test_system.launch.py
+    synchronized_system.launch.py  # Full system (Gazebo + all nodes)
+    uwb_emulator.launch.py         # UWB emulator only
+    uwb_test_system.launch.py      # UWB + PlotJuggler
   src/
-    UWB_utils_emulator.cpp     # uwb_emulator node (C++)
-    Regulator_node.cpp         # controller_node (C++)
-    KF.py                      # distance_kf_node (Python)
+    UWB_utils_emulator.cpp          # uwb_emulator node (C++)
+    Regulator_node.cpp              # controller_node (C++) - trilateration + dual PD control
+    KF.py                           # distance_kf_node (Python) - Kalman filtering
   custom_messages/
-    AnchorDist.msg
-    RobotDist.msg
+    AnchorDist.msg                  # distances_a1, distances_a2, distances_a3
+    RobotDist.msg                   # distances_r1, distances_r2, distances_r3
   include/
-    UWB_utils_emulator.hpp     # (C++ class declarations)
-    Regulator_node.hpp         # (if/when needed)
+    UWB_utils_emulator.hpp          # C++ class declarations
+    Regulator_node.hpp              # (if/when needed)
   *.yaml
-    sensor_params.yaml
-    sensor_params_uniform.yaml
-    UKF_params.yaml
-    controller.yaml
+    sensor_params.yaml              # Anchor positions, Gaussian noise
+    sensor_params_uniform.yaml      # Uniform noise alternative
+    UKF_params.yaml                 # KF process noise, outlier detection
+    controller.yaml                 # PD gains (Kp, Kv), velocity limits
 ```
 
 ## License

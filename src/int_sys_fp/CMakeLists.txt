@@ -90,6 +90,7 @@ install(TARGETS
 # Install Python scripts
 install(PROGRAMS
   src/KF.py
+  src/trajectory_planner.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -5,6 +5,7 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+#include <geometry_msgs/msg/pose.hpp>
 #include "UWB_utils_emulator.hpp"
 #include <deque>
 #include "int_sys_fp/msg/anchor_dist.hpp"
@@ -22,43 +23,134 @@ class ControllerClass : public rclcpp::Node{
 
         ControllerClass() : Node("controller_node")
         {
+            // Create publishers for TurtleBot3 cmd_vel topics
+            cmd_vel_robot1_pub = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+            cmd_vel_robot2_pub = this->create_publisher<geometry_msgs::msg::Twist>("/tb3_2/cmd_vel", 10);
+            cmd_vel_robot3_pub = this->create_publisher<geometry_msgs::msg::Twist>("/tb3_3/cmd_vel", 10);
 
-            // Create publishers 
+            // Create publishers for debug/monitoring
+            kf_filtered_robot_pose_pub = this->create_publisher<std_msgs::msg::Float64MultiArray>("kf_filtered_robot_pose", 10);
+            kf_filtered_centroid_pose_pub = this->create_publisher<std_msgs::msg::Float64MultiArray>("kf_filtered_centroid_pose", 10);
+            centroid_pose_pub = this->create_publisher<std_msgs::msg::Float64MultiArray>("centroid_pose", 10);
 
-            kf_filtered_robot_pose_pub = this->create_publisher<std_msgs::msg::Float64MultiArray>("kf_filtered_robot_pose", 15);
-            kf_filtered_centroid_pose_pub = this->create_publisher<std_msgs::msg::Float64MultiArray>("kf_filtered_centroid_pose", 15);
-            centroid_pose_pub = this->create_publisher<std_msgs::msg::Float64MultiArray>("centroid_pose", 15);
-            effort_robot1_pub = this->create_publisher<geometry_msgs::msg::Twist>("effort_robot1", 15);
-            effort_robot2_pub = this->create_publisher<geometry_msgs::msg::Twist>("effort_robot2", 15);
-            effort_robot3_pub = this->create_publisher<geometry_msgs::msg::Twist>("effort_robot3", 15);
-
-            // Create subscribers for UWB data
-            // std::bind allows us to access the class methods without explicitly calling the constructor of the class --> no need to create an istance of the class to use the methods 
+            // Create subscribers for filtered UWB data
             uwb_anchor_sub = this->create_subscription<int_sys_fp::msg::AnchorDist>(
-                "/uwb/anchor_distances", 10,
+                "/uwb/filtered_anchor_distances", 10,
                 std::bind(&ControllerClass::UWB_read_anchor_callback, this, std::placeholders::_1));
             
             uwb_robot_sub = this->create_subscription<int_sys_fp::msg::RobotDist>(
-                "/uwb/robot_distances", 10,
+                "/uwb/filtered_robot_distances", 10,
                 std::bind(&ControllerClass::UWB_robot_callback, this, std::placeholders::_1));
 
-            // initialize robot positions 
+            // Subscriber for desired trajectory from planner
+            trajectory_sub = this->create_subscription<geometry_msgs::msg::Pose>(
+                "/desired_trajectory", 10,
+                std::bind(&ControllerClass::trajectory_callback, this, std::placeholders::_1));
 
-            robot_positions.resize(3);
-            robot_velocities.resize(3);
-            robot_efforts.resize(3);
-
-            // continue next ...
-
-
-
-        }
-
-        void init(){
+            // Initialize robot states
+            robot_positions.resize(3, Eigen::Vector2d::Zero());
+            robot_velocities.resize(3, Eigen::Vector2d::Zero());
+            inter_robot_distances.resize(3, Eigen::Vector2d::Zero());
             
+            // Initialize anchor positions from sensor config
+            load_anchor_positions();
+            
+            // Load controller parameters
+            load_controller_params();
+            
+            // Initialize desired trajectory (default at origin)
+            desired_position = Eigen::Vector2d::Zero();
+            desired_velocity = Eigen::Vector2d::Zero();
+            
+            // Desired inter-robot distance for equilateral triangle
+            desired_distance = 1.0; // meters
+            
+            // Create control timer (50 Hz)
+            control_timer = this->create_wall_timer(
+                std::chrono::milliseconds(20),
+                std::bind(&ControllerClass::control_loop, this));
+            
+            RCLCPP_INFO(this->get_logger(), "Controller node initialized");
+            RCLCPP_INFO(this->get_logger(), "Anchor positions loaded: 3 anchors");
+            RCLCPP_INFO(this->get_logger(), "Controller gains loaded from config");
         }
 
-        void update(){}
+        void load_anchor_positions() {
+            // Load anchor positions from sensor_params.yaml
+            try {
+                std::string package_share = ament_index_cpp::get_package_share_directory("int_sys_fp");
+                std::string yaml_path = package_share + "/sensor_params.yaml";
+                YAML::Node config = YAML::LoadFile(yaml_path);
+                
+                auto uwb_config = config["UWB_sensor"];
+                anchor_positions.resize(3);
+                
+                for(int i = 0; i < 3; i++) {
+                    auto anchor_node = uwb_config["anchor " + std::to_string(i+1)]["position"];
+                    anchor_positions[i] = Eigen::Vector3d(
+                        anchor_node[0].as<double>(),
+                        anchor_node[1].as<double>(),
+                        anchor_node[2].as<double>()
+                    );
+                }
+                
+                RCLCPP_INFO(this->get_logger(), "Anchors: [%.1f,%.1f] [%.1f,%.1f] [%.1f,%.1f]",
+                    anchor_positions[0].x(), anchor_positions[0].y(),
+                    anchor_positions[1].x(), anchor_positions[1].y(),
+                    anchor_positions[2].x(), anchor_positions[2].y());
+            } catch (const std::exception& e) {
+                RCLCPP_ERROR(this->get_logger(), "Failed to load anchors: %s", e.what());
+                // Default positions
+                anchor_positions.resize(3);
+                anchor_positions[0] = Eigen::Vector3d(0.0, 0.0, 0.0);
+                anchor_positions[1] = Eigen::Vector3d(10.0, 0.0, 0.0);
+                anchor_positions[2] = Eigen::Vector3d(0.0, 10.0, 0.0);
+            }
+        }
+
+        void load_controller_params() {
+            try {
+                std::string package_share = ament_index_cpp::get_package_share_directory("int_sys_fp");
+                std::string yaml_path = package_share + "/controller.yaml";
+                YAML::Node config = YAML::LoadFile(yaml_path);
+                
+                auto ctrl_params = config["controller_params"];
+                
+                // Load position gains (Kp)
+                auto kp_r1 = ctrl_params["position_gains"]["Kp_r1"];
+                Kp_centroid = Eigen::Vector2d(kp_r1[0].as<double>(), kp_r1[1].as<double>());
+                
+                // Load velocity gains (Kv)
+                auto kv_r1 = ctrl_params["velocity_gains"]["Kv_r1"];
+                Kv_centroid = Eigen::Vector2d(kv_r1[0].as<double>(), kv_r1[1].as<double>());
+                
+                // Load max velocities
+                auto max_vel = ctrl_params["max_velocities"]["max_vel_r"];
+                max_linear_vel = max_vel[0].as<double>();
+                
+                auto max_omega = ctrl_params["max_velocities"]["max_omega_r"];
+                max_angular_vel = max_omega[0].as<double>();
+                
+                // Formation control gain
+                Kf = 0.5; // Formation gain
+                
+                RCLCPP_INFO(this->get_logger(), "Controller gains: Kp=[%.2f,%.2f] Kv=[%.2f,%.2f] Kf=%.2f",
+                    Kp_centroid.x(), Kp_centroid.y(), Kv_centroid.x(), Kv_centroid.y(), Kf);
+            } catch (const std::exception& e) {
+                RCLCPP_WARN(this->get_logger(), "Failed to load controller params: %s, using defaults", e.what());
+                Kp_centroid = Eigen::Vector2d(0.6, 0.6);
+                Kv_centroid = Eigen::Vector2d(0.3, 0.3);
+                Kf = 0.5;
+                max_linear_vel = 0.22;
+                max_angular_vel = 2.84;
+            }
+        }
+
+        void trajectory_callback(const geometry_msgs::msg::Pose::SharedPtr msg) {
+            desired_position = Eigen::Vector2d(msg->position.x, msg->position.y);
+            RCLCPP_DEBUG(this->get_logger(), "New desired position: [%.2f, %.2f]", 
+                desired_position.x(), desired_position.y());
+        }
 
         Eigen::Vector3d solve_triangle(double l1,double l2,double l3){
             
@@ -82,75 +174,139 @@ class ControllerClass : public rclcpp::Node{
             return angles;
         }
 
-        void compute_positions(std::vector<Eigen::Vector3d> & anchor_distances, std::vector<Eigen::Vector3d> & anchor_positions, std::vector<Eigen::Vector2d> & robot_distances){
-
-            if(anchor_distances.size() != 3 || anchor_positions.size() != 3){
-
-                RCLCPP_WARN(this->get_logger(),"Invalid anchor distances or positions format: expected 3 distances vectors and 3 positions vectors");
-
-                return;
-
-            } 
-
-            // initialize return vector
-
-            std::vector<Eigen::Vector3d> robot_postions(3,Eigen::Vector3d::Zero());
-
-            // compute the angles for the trilateration
-
-            Eigen::Vector3d GF_POSE = Eigen::Vector3d::Zero();
-
-            // compute the USEFUL distances of the anchors 
-
-            double a1a3 = (anchor_positions[2]-anchor_positions[0]).norm();
-
-            double a1a2 = (anchor_positions[1]-anchor_positions[0]).norm();
-
-            Eigen::Vector3d angle_1 = solve_triangle( // first triangle to solve 
-                anchor_distances[0][0],
-                anchor_distances[2][0],
-                a1a2
-            ); 
-
-            Eigen::Vector3d angle_2 = solve_triangle( // second triangle to solve
-                a1a3,
-                anchor_distances[2][0],
-                anchor_distances[0][0]
-            ); 
-
-            Eigen::Vector3d angle_3 = solve_triangle( // third triangle to solve
-                anchor_distances[2][1],
-                mid(robot_distances[0][0],robot_distances[0][1]), // make the mean of the two noisy distances
-                anchor_distances[2][0]
-            ); 
-
-            Eigen::Vector3d angle_4 = solve_triangle( // fourth triangle to solve
-                anchor_distances[1][0],
-                mid(robot_distances[0][1],robot_distances[2][0]), // make the mean of the two noisy distances
-                anchor_distances[1][2]
-            ); 
-
-            // extract useful angles to compute frame transformations 
+        void trilaterate_robot_position(int robot_idx, double d1, double d2, double d3) {
+            // Simple 2D trilateration using three anchor distances
+            // Anchors: A1=(x1,y1), A2=(x2,y2), A3=(x3,y3)
+            // Robot at (x,y) with distances d1, d2, d3
             
-            // sarà da bestemmiare capire se sono giusti, troppi triangoli non capisco na sega !!!
-            double theta_r1 = angle_1[0];
-            double theta_r2 = angle_2[0]+ angle_1[2] - PI/2.0 ;
-            double theta_r3 = PI - angle_4[0]-angle_1[1]; 
+            Eigen::Vector2d p1(anchor_positions[0].x(), anchor_positions[0].y());
+            Eigen::Vector2d p2(anchor_positions[1].x(), anchor_positions[1].y());
+            Eigen::Vector2d p3(anchor_positions[2].x(), anchor_positions[2].y());
+            
+            // Using standard trilateration algorithm
+            double A = 2 * (p2.x() - p1.x());
+            double B = 2 * (p2.y() - p1.y());
+            double C = d1*d1 - d2*d2 - p1.x()*p1.x() + p2.x()*p2.x() - p1.y()*p1.y() + p2.y()*p2.y();
+            
+            double D = 2 * (p3.x() - p2.x());
+            double E = 2 * (p3.y() - p2.y());
+            double F = d2*d2 - d3*d3 - p2.x()*p2.x() + p3.x()*p3.x() - p2.y()*p2.y() + p3.y()*p3.y();
+            
+            double denom = A*E - B*D;
+            if (std::abs(denom) < 1e-6) {
+                RCLCPP_WARN(this->get_logger(), "Trilateration singular matrix for robot %d", robot_idx);
+                return;
+            }
+            
+            double x = (C*E - F*B) / denom;
+            double y = (A*F - D*C) / denom;
+            
+            robot_positions[robot_idx] = Eigen::Vector2d(x, y);
+            
+            RCLCPP_DEBUG(this->get_logger(), "Robot %d estimated at [%.2f, %.2f] from distances [%.2f,%.2f,%.2f]",
+                robot_idx, x, y, d1, d2, d3);
+        }
 
-            // compute the rotation matrices for each robot 
+        Eigen::Vector2d compute_centroid() {
+            Eigen::Vector2d centroid = Eigen::Vector2d::Zero();
+            for(const auto& pos : robot_positions) {
+                centroid += pos;
+            }
+            centroid /= 3.0;
+            return centroid;
+        }
 
-            Eigen::Rotation2Dd Rzr1, Rzr2, Rzr3;
+        Eigen::Vector2d compute_centroid_tracking_control(const Eigen::Vector2d& centroid) {
+            // PD controller for centroid tracking
+            Eigen::Vector2d position_error = desired_position - centroid;
+            Eigen::Vector2d velocity_error = desired_velocity - Eigen::Vector2d::Zero(); // assuming stationary target
+            
+            Eigen::Vector2d control = Kp_centroid.cwiseProduct(position_error) + 
+                                     Kv_centroid.cwiseProduct(velocity_error);
+            
+            return control;
+        }
 
-            Rzr1 = Eigen::Rotation2Dd(theta_r1);
-            Rzr2 = Eigen::Rotation2Dd(theta_r2);
-            Rzr3 = Eigen::Rotation2Dd(theta_r3);
+        Eigen::Vector2d compute_formation_control(int robot_idx) {
+            // Formation control to maintain equilateral triangle
+            // Force to maintain equal distances between all robots
+            Eigen::Vector2d formation_force = Eigen::Vector2d::Zero();
+            
+            for(int j = 0; j < 3; j++) {
+                if(j == robot_idx) continue;
+                
+                Eigen::Vector2d diff = robot_positions[robot_idx] - robot_positions[j];
+                double current_dist = diff.norm();
+                
+                if(current_dist < 1e-3) continue; // Avoid division by zero
+                
+                // Spring-like force: pushes apart if too close, pulls together if too far
+                double error = current_dist - desired_distance;
+                Eigen::Vector2d direction = diff / current_dist;
+                
+                formation_force += -Kf * error * direction; // negative to correct the error
+            }
+            
+            return formation_force;
+        }
 
-            // define the robot positions in the implicit rotated frame and apply the rotations to go in global frame
-
-            Eigen::Vector2d r1_pos = apply_rotation(Eigen::Vector2d(anchor_distances[0][0], 0.0), Rzr1);
-            Eigen::Vector2d r2_pos = apply_rotation(Eigen::Vector2d(anchor_distances[2][1], 0.0), Rzr2);
-            Eigen::Vector2d r3_pos = apply_rotation(Eigen::Vector2d(anchor_distances[1][2], 0.0), Rzr3);
-
+        void control_loop() {
+            // Main control loop called at 50 Hz
+            
+            // Check if we have valid position estimates
+            bool valid_data = true;
+            for(const auto& pos : robot_positions) {
+                if(pos.norm() < 1e-6) {
+                    valid_data = false;
+                    break;
+                }
+            }
+            
+            if(!valid_data) {
+                RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 2000, 
+                    "Waiting for valid robot position estimates...");
+                return;
+            }
+            
+            // Compute centroid
+            Eigen::Vector2d centroid = compute_centroid();
+            
+            // Publish centroid for monitoring
+            auto centroid_msg = std_msgs::msg::Float64MultiArray();
+            centroid_msg.data = {centroid.x(), centroid.y()};
+            centroid_pose_pub->publish(centroid_msg);
+            
+            // Compute centroid tracking control
+            Eigen::Vector2d centroid_control = compute_centroid_tracking_control(centroid);
+            
+            // Compute and publish velocity commands for each robot
+            for(int i = 0; i < 3; i++) {
+                // Formation control
+                Eigen::Vector2d formation_control = compute_formation_control(i);
+                
+                // Total control = centroid tracking + formation maintenance
+                Eigen::Vector2d total_control = centroid_control + formation_control;
+                
+                // Saturate velocity
+                double vel_norm = total_control.norm();
+                if(vel_norm > max_linear_vel) {
+                    total_control = total_control / vel_norm * max_linear_vel;
+                }
+                
+                // Create Twist message
+                auto cmd_msg = geometry_msgs::msg::Twist();
+                cmd_msg.linear.x = total_control.x();
+                cmd_msg.linear.y = total_control.y();
+                cmd_msg.angular.z = 0.0; // Assuming holonomic control or simplified model
+                
+                // Publish to appropriate robot
+                if(i == 0) cmd_vel_robot1_pub->publish(cmd_msg);
+                else if(i == 1) cmd_vel_robot2_pub->publish(cmd_msg);
+                else if(i == 2) cmd_vel_robot3_pub->publish(cmd_msg);
+                
+                RCLCPP_DEBUG(this->get_logger(), "Robot %d cmd: [%.3f, %.3f]", 
+                    i, total_control.x(), total_control.y());
+            }
         }
 
         double mid(double a, double b){
@@ -158,12 +314,11 @@ class ControllerClass : public rclcpp::Node{
         }
 
         Eigen::Vector2d apply_rotation(const Eigen::Vector2d & vec ,Eigen::Rotation2Dd & rotation){
-            // Apply the rotation to the vector
             return rotation * vec;
         }
 
         void UWB_read_anchor_callback(const int_sys_fp::msg::AnchorDist::SharedPtr msg){
-            // Callback per dati UWB anchor distances
+            // Callback per dati UWB anchor distances filtrati dal Kalman Filter
             // msg contiene: distances_a1, distances_a2, distances_a3
             // ogni array contiene le distanze di tutti i robot a quell'anchor
             
@@ -173,23 +328,34 @@ class ControllerClass : public rclcpp::Node{
                 return;
             }
             
-            // Process trilaterazione per ogni robot
-            for(int robot_idx = 0; robot_idx < 3; robot_idx++) {
+            // Trilateration per ogni robot usando le distanze filtrate
+            for(size_t robot_idx = 0; robot_idx < 3; robot_idx++) {
                 double d1 = msg->distances_a1[robot_idx]; // Distance to anchor 1
                 double d2 = msg->distances_a2[robot_idx]; // Distance to anchor 2  
                 double d3 = msg->distances_a3[robot_idx]; // Distance to anchor 3
                 
-                // TODO: Implementa trilaterazione vera qui
-                // Eigen::Vector3d pos = solve_trilateration(d1, d2, d3, anchor_positions);
-                // robot_positions[robot_idx] = pos;
+                // Skip if out of range (marked as -1.0)
+                if(d1 < 0 || d2 < 0 || d3 < 0) {
+                    RCLCPP_DEBUG(this->get_logger(), "Robot %d has out-of-range distances, skipping", robot_idx);
+                    continue;
+                }
                 
-                RCLCPP_DEBUG(this->get_logger(), "Robot %d distances: [%.3f, %.3f, %.3f]", 
-                           robot_idx, d1, d2, d3);
+                // Perform trilateration
+                trilaterate_robot_position(robot_idx, d1, d2, d3);
             }
+            
+            // Publish estimated robot positions for monitoring
+            auto robot_pose_msg = std_msgs::msg::Float64MultiArray();
+            robot_pose_msg.data.clear();
+            for(const auto& pos : robot_positions) {
+                robot_pose_msg.data.push_back(pos.x());
+                robot_pose_msg.data.push_back(pos.y());
+            }
+            kf_filtered_robot_pose_pub->publish(robot_pose_msg);
         }
 
         void UWB_robot_callback(const int_sys_fp::msg::RobotDist::SharedPtr msg){
-            // Callback per dati UWB robot-to-robot distances
+            // Callback per dati UWB robot-to-robot distances filtrati
             // msg contiene: distances_r1, distances_r2, distances_r3
             // ogni array contiene le distanze di quel robot verso gli altri
             
@@ -199,58 +365,72 @@ class ControllerClass : public rclcpp::Node{
                 return;
             }
             
-            // Process distanze inter-robot per controllo formazione
-            RCLCPP_DEBUG(this->get_logger(), "Robot distances - R1:[%.3f,%.3f] R2:[%.3f,%.3f] R3:[%.3f,%.3f]",
-                       msg->distances_r1[0], msg->distances_r1[1], 
-                       msg->distances_r2[0], msg->distances_r2[1],
-                       msg->distances_r3[0], msg->distances_r3[1]);
+            // Store inter-robot distances for formation control
+            // Robot 1 sees: [dist to R2, dist to R3]
+            // Robot 2 sees: [dist to R1, dist to R3]
+            // Robot 3 sees: [dist to R1, dist to R2]
+            inter_robot_distances[0] = Eigen::Vector2d(msg->distances_r1[0], msg->distances_r1[1]);
+            inter_robot_distances[1] = Eigen::Vector2d(msg->distances_r2[0], msg->distances_r2[1]);
+            inter_robot_distances[2] = Eigen::Vector2d(msg->distances_r3[0], msg->distances_r3[1]);
+            
+            // Log average distance for monitoring equilateral formation
+            double avg_dist = (msg->distances_r1[0] + msg->distances_r1[1] + 
+                              msg->distances_r2[0] + msg->distances_r2[1] +
+                              msg->distances_r3[0] + msg->distances_r3[1]) / 6.0;
+            
+            RCLCPP_DEBUG(this->get_logger(), "Inter-robot distances avg: %.3f m (desired: %.3f m)", 
+                avg_dist, desired_distance);
         }
 
-        void write_effort_command_callback(){}
-        
-        Eigen::Vector3d compute_velocities(){
-            // Placeholder for velocity computation
-            // In a real implementation, this would compute the robot's velocities based on the current state
-            return Eigen::Vector3d::Zero();
-        }
 
-        Eigen::Vector3d compute_accelerations(){
-            // Placeholder for velocity computation
-            // In a real implementation, this would compute the robot's velocities based on the current state
-            return Eigen::Vector3d::Zero();
-        }
 
 
 
     private:
 
-        // Publishers 
+        // Publishers for robot cmd_vel
+        rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_robot1_pub;
+        rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_robot2_pub;
+        rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_robot3_pub;
 
+        // Publishers for monitoring
         rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr kf_filtered_robot_pose_pub;
         rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr kf_filtered_centroid_pose_pub;
         rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr centroid_pose_pub;
-        rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr effort_robot1_pub;
-        rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr effort_robot2_pub;
-        rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr effort_robot3_pub;
-        rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr error_centroid_pub;
 
-        // Subscribers for UWB data
-
+        // Subscribers for UWB filtered data
         rclcpp::Subscription<int_sys_fp::msg::AnchorDist>::SharedPtr uwb_anchor_sub;
         rclcpp::Subscription<int_sys_fp::msg::RobotDist>::SharedPtr uwb_robot_sub;
-
-        // Timer for Publishing 
-
-        rclcpp::TimerBase::SharedPtr timer_;
-
-        // Robot states 
-
-        std::vector<Eigen::Vector3d> robot_positions;
-        std::vector<Eigen::Vector3d> robot_velocities;
-        std::vector<Eigen::Vector3d> robot_efforts;
         
-        // Anchor positions (should match UWB emulator config)
+        // Subscriber for desired trajectory from planner
+        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr trajectory_sub;
+
+        // Control timer (50 Hz)
+        rclcpp::TimerBase::SharedPtr control_timer;
+
+        // Robot states (2D for simplicity)
+        std::vector<Eigen::Vector2d> robot_positions;        // Estimated from trilateration
+        std::vector<Eigen::Vector2d> robot_velocities;       // Could be estimated or measured
+        std::vector<Eigen::Vector2d> inter_robot_distances;  // Distances between robots
+        
+        // Anchor positions (loaded from config)
         std::vector<Eigen::Vector3d> anchor_positions;
+        
+        // Desired trajectory from planner
+        Eigen::Vector2d desired_position;
+        Eigen::Vector2d desired_velocity;
+        
+        // Formation control parameters
+        double desired_distance;  // Desired inter-robot distance for equilateral triangle
+        
+        // Controller gains
+        Eigen::Vector2d Kp_centroid;  // Position gain for centroid tracking
+        Eigen::Vector2d Kv_centroid;  // Velocity gain for centroid tracking
+        double Kf;                     // Formation control gain
+        
+        // Velocity limits
+        double max_linear_vel;
+        double max_angular_vel;
 
 
 };
