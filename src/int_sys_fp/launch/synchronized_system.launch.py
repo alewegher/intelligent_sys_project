@@ -4,7 +4,7 @@ import os
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction, SetEnvironmentVariable
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, NotSubstitution
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from ament_index_python.packages import get_package_share_directory
@@ -38,6 +38,12 @@ def generate_launch_description():
         'trajectory_type',
         default_value='circle',
         description='Trajectory type: circle, line, square, static'
+    )
+    
+    use_cpp_kf_arg = DeclareLaunchArgument(
+        'use_cpp_kf',
+        default_value='true',
+        description='Use C++ Kalman Filter implementation instead of Python (for better performance)'
     )
 
     # Ensure TurtleBot3 model env var is set for gazebo/model resolution
@@ -131,13 +137,25 @@ def generate_launch_description():
     )
 
     # Kalman Filter Python node (installed via CMake install(PROGRAMS ...))
-    kf_node = Node(
+    kf_python_node = Node(
         package='int_sys_fp',
         executable='KF.py',  # script installed into lib/int_sys_fp/KF.py
         name='distance_kf_node',
         parameters=[{'use_sim_time': True}],
         output='screen',
-        emulate_tty=True
+        emulate_tty=True,
+        condition=IfCondition(NotSubstitution(LaunchConfiguration('use_cpp_kf')))
+    )
+    
+    # Kalman Filter C++ node (compiled executable for better performance)
+    kf_cpp_node = Node(
+        package='int_sys_fp',
+        executable='distance_kf_node',  # compiled C++ executable
+        name='distance_kf_node',
+        parameters=[{'use_sim_time': True}],
+        output='screen',
+        emulate_tty=True,
+        condition=IfCondition(LaunchConfiguration('use_cpp_kf'))
     )
     
     # Trajectory Planner Node (optional)
@@ -161,6 +179,7 @@ def generate_launch_description():
         noise_type_arg,
         enable_planner_arg,
         trajectory_type_arg,
+        use_cpp_kf_arg,
         set_tb3_model,
         gazebo_launch,
         gzclient_launch,
@@ -169,7 +188,8 @@ def generate_launch_description():
         spawn_tb3_3,
         uwb_emulator_node,
         controller_node,
-        kf_node,
+        kf_python_node,
+        kf_cpp_node,
         planner_node
     ])
 

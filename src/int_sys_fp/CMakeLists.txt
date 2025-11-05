@@ -29,6 +29,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 # Add executable
 add_executable(uwb_emulator src/UWB_utils_emulator.cpp)
 add_executable(regulator_node src/Regulator_node.cpp)
+add_executable(distance_kf_node src/UKF.cpp)
 
 # --- CONFIGURAZIONE DEGLI HEADER E DELLE DIPENDENZE ---
 # Imposta la cartella 'include' per i nodi sorgente (CORREZIONE per percorsi relativi)
@@ -40,6 +41,12 @@ target_include_directories(uwb_emulator PUBLIC
 )
 
 target_include_directories(regulator_node PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  ${EIGEN3_INCLUDE_DIRS}
+)
+
+target_include_directories(distance_kf_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
   ${EIGEN3_INCLUDE_DIRS}
@@ -62,10 +69,18 @@ ament_target_dependencies(regulator_node
   ament_index_cpp
 )
 
+ament_target_dependencies(distance_kf_node
+  rclcpp
+  std_msgs
+  geometry_msgs
+  ament_index_cpp
+)
+
 # Link with generated messages
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
 target_link_libraries(uwb_emulator ${cpp_typesupport_target})
 target_link_libraries(regulator_node ${cpp_typesupport_target})
+target_link_libraries(distance_kf_node ${cpp_typesupport_target})
 
 # Link with external libraries (YAML and Eigen)
 target_link_libraries(uwb_emulator
@@ -77,6 +92,11 @@ target_link_libraries(regulator_node
   ${YAML_CPP_LIBRARIES}
   Eigen3::Eigen
 )
+
+target_link_libraries(distance_kf_node
+  ${YAML_CPP_LIBRARIES}
+  Eigen3::Eigen
+)
 # -----------------------------------------------------
 
 
@@ -84,6 +104,7 @@ target_link_libraries(regulator_node
 install(TARGETS
   uwb_emulator
   regulator_node
+  distance_kf_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
