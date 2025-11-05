@@ -31,13 +31,7 @@ def generate_launch_description():
     enable_planner_arg = DeclareLaunchArgument(
         'enable_planner',
         default_value='false',
-        description='Enable trajectory planner node'
-    )
-    
-    trajectory_type_arg = DeclareLaunchArgument(
-        'trajectory_type',
-        default_value='circle',
-        description='Trajectory type: circle, line, square, static'
+        description='Enable trajectory planner node (circular trajectory)'
     )
     
     use_cpp_kf_arg = DeclareLaunchArgument(
@@ -158,16 +152,16 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('use_cpp_kf'))
     )
     
-    # Trajectory Planner Node (optional)
+    # Trajectory Planner Node (optional) - Circular trajectory around origin
     planner_node = Node(
         package='int_sys_fp',
         executable='trajectory_planner.py',
         name='trajectory_planner',
         parameters=[
-            {'trajectory_type': LaunchConfiguration('trajectory_type')},
-            {'radius': 3.0},
-            {'speed': 0.2},
-            {'update_rate': 10.0}
+            {'radius': 3.0},              # Circle radius in meters
+            {'angular_velocity': 0.2},    # rad/s (0.2 rad/s ≈ 11.5°/s)
+            {'update_rate': 50.0},        # Hz (same as controller)
+            {'use_sim_time': True}
         ],
         output='screen',
         emulate_tty=True,
@@ -178,7 +172,6 @@ def generate_launch_description():
         uwb_frequency_arg,
         noise_type_arg,
         enable_planner_arg,
-        trajectory_type_arg,
         use_cpp_kf_arg,
         set_tb3_model,
         gazebo_launch,

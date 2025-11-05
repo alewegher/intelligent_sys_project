@@ -64,8 +64,6 @@ class DistanceKFNode(Node):
             AnchorDist, 'uwb/filtered_anchor_distances', 10)
         self.filtered_robot_pub = self.create_publisher(
             RobotDist, 'uwb/filtered_robot_distances', 10)
-        self.covariance_pub = self.create_publisher(
-            Float64MultiArray, 'ukf_covariance_matrix', 10)
         
         # Initialize UKF state and covariance
         self.initialize_ukf_state()
@@ -178,7 +176,6 @@ class DistanceKFNode(Node):
         
         # Publish filtered results
         self.publish_filtered_results()
-        self.publish_covariance_matrix()
     
     def filter_single_distance(self, measurement_idx, raw_distance):
         """Apply scalar Kalman filter to a single distance measurement"""
@@ -346,36 +343,6 @@ class DistanceKFNode(Node):
         num_valid_measurements = np.sum(self.distance_estimates > 0.01)
         self.get_logger().info(f"📡 Published filtered distances: {num_valid_measurements}/{self.total_measurements} valid, "
                              f"avg uncertainty: {avg_uncertainty:.4f}m")
-    
-    def publish_covariance_matrix(self):
-        """Publish distance covariances as Float64MultiArray"""
-        
-        cov_msg = Float64MultiArray()
-        
-        # Publish diagonal covariance matrix of distance estimates
-        # Create diagonal matrix from individual distance covariances
-        cov_matrix = np.diag(self.distance_covariances)
-        
-        # Flatten covariance matrix for publishing
-        cov_msg.data = cov_matrix.flatten().tolist()
-        
-        # Set layout information
-        n_meas = self.total_measurements
-        cov_msg.layout.dim = [
-            MultiArrayDimension(label="rows", size=n_meas, stride=n_meas * n_meas),
-            MultiArrayDimension(label="cols", size=n_meas, stride=n_meas)
-        ]
-        cov_msg.layout.data_offset = 0
-        
-        self.covariance_pub.publish(cov_msg)
-        
-        # Log total uncertainty as sum of variances
-        total_uncertainty = np.sum(self.distance_covariances)
-        max_uncertainty = np.max(self.distance_covariances)
-        min_uncertainty = np.min(self.distance_covariances)
-        
-        self.get_logger().debug(f"Distance uncertainties - Total: {total_uncertainty:.4f}, "
-                                f"Max: {max_uncertainty:.4f}, Min: {min_uncertainty:.4f}")
     
     def parse_KF_parameters(self, sensor_conf_file_path):
         """Parse Kalman Filter parameters from single sensor_params.yaml file"""

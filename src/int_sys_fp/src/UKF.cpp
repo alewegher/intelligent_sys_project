@@ -58,9 +58,6 @@ public:
         filtered_robot_pub_ = this->create_publisher<int_sys_fp::msg::RobotDist>(
             "uwb/filtered_robot_distances", 10);
         
-        covariance_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
-            "ukf_covariance_matrix", 10);
-        
         // Create timer
         timer_ = this->create_wall_timer(
             std::chrono::milliseconds(static_cast<int>(dt_ * 1000)),
@@ -105,7 +102,6 @@ private:
     rclcpp::Subscription<int_sys_fp::msg::RobotDist>::SharedPtr uwb_robot_sub_;
     rclcpp::Publisher<int_sys_fp::msg::AnchorDist>::SharedPtr filtered_anchor_pub_;
     rclcpp::Publisher<int_sys_fp::msg::RobotDist>::SharedPtr filtered_robot_pub_;
-    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr covariance_pub_;
     rclcpp::TimerBase::SharedPtr timer_;
     
     void parse_kf_parameters() {
@@ -288,7 +284,6 @@ private:
         
         // Publish results
         publish_filtered_results();
-        publish_covariance_matrix();
     }
     
     void filter_single_distance(int measurement_idx, double raw_distance) {
@@ -401,43 +396,6 @@ private:
         double avg_uncertainty = distance_covariances_.mean();
         RCLCPP_INFO(this->get_logger(), "📡 Published filtered distances: %d/%d valid, avg uncertainty: %.4fm",
             num_valid, TOTAL_MEASUREMENTS, avg_uncertainty);
-    }
-    
-    void publish_covariance_matrix() {
-        auto cov_msg = std_msgs::msg::Float64MultiArray();
-        
-        // Create diagonal covariance matrix
-        MatrixXd cov_matrix = distance_covariances_.asDiagonal();
-        
-        // Flatten
-        cov_msg.data.resize(TOTAL_MEASUREMENTS * TOTAL_MEASUREMENTS);
-        for(int i = 0; i < TOTAL_MEASUREMENTS; i++) {
-            for(int j = 0; j < TOTAL_MEASUREMENTS; j++) {
-                cov_msg.data[i * TOTAL_MEASUREMENTS + j] = cov_matrix(i, j);
-            }
-        }
-        
-        // Set layout
-        std_msgs::msg::MultiArrayDimension dim1, dim2;
-        dim1.label = "rows";
-        dim1.size = TOTAL_MEASUREMENTS;
-        dim1.stride = TOTAL_MEASUREMENTS * TOTAL_MEASUREMENTS;
-        
-        dim2.label = "cols";
-        dim2.size = TOTAL_MEASUREMENTS;
-        dim2.stride = TOTAL_MEASUREMENTS;
-        
-        cov_msg.layout.dim = {dim1, dim2};
-        cov_msg.layout.data_offset = 0;
-        
-        covariance_pub_->publish(cov_msg);
-        
-        double total_uncertainty = distance_covariances_.sum();
-        double max_uncertainty = distance_covariances_.maxCoeff();
-        double min_uncertainty = distance_covariances_.minCoeff();
-        
-        RCLCPP_DEBUG(this->get_logger(), "Distance uncertainties - Total: %.4f, Max: %.4f, Min: %.4f",
-            total_uncertainty, max_uncertainty, min_uncertainty);
     }
 };
 
