@@ -392,7 +392,7 @@ class UWBNodeClass : public rclcpp::Node{
 
         // Helper function to apply saturation for anchor distances
         void apply_anchor_saturation(std::vector<double>& distances, int anchor_id) {
-            for(int robot_id = 0; robot_id < distances.size(); robot_id++) {
+            for(int robot_id = 0; robot_id < (int)distances.size(); robot_id++) {
                 if(distances[robot_id] < anchor_sensor_ranges_[anchor_id][0] ||
                    distances[robot_id] > anchor_sensor_ranges_[anchor_id][1]) 
                 {
@@ -407,7 +407,7 @@ class UWBNodeClass : public rclcpp::Node{
 
         // Helper function to apply saturation for robot-to-robot distances
         void apply_robot_saturation(std::vector<double>& distances, int robot_id) {
-            for(int dist_idx = 0; dist_idx < distances.size(); dist_idx++) {
+            for(int dist_idx = 0; dist_idx < (int)distances.size(); dist_idx++) {
                 if(distances[dist_idx] < robot_sensor_ranges_[robot_id][0] ||
                    distances[dist_idx] > robot_sensor_ranges_[robot_id][1]) 
                 {

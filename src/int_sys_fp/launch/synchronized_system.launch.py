@@ -30,7 +30,7 @@ def generate_launch_description():
     
     enable_planner_arg = DeclareLaunchArgument(
         'enable_planner',
-        default_value='false',
+        default_value='true',
         description='Enable trajectory planner node (circular trajectory)'
     )
     
@@ -158,8 +158,8 @@ def generate_launch_description():
         executable='trajectory_planner.py',
         name='trajectory_planner',
         parameters=[
-            {'radius': 3.0},              # Circle radius in meters
-            {'angular_velocity': 0.2},    # rad/s (0.2 rad/s ≈ 11.5°/s)
+            {'radius': 5.0},             # Circle radius in meters (outside anchor area)
+            {'angular_velocity': 0.05},    # rad/s (slower for large radius)
             {'update_rate': 50.0},        # Hz (same as controller)
             {'use_sim_time': True}
         ],
