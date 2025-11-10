@@ -224,7 +224,7 @@ class DistanceKFNode(Node):
         """Apply more sophisticated filtering based on measurement history"""
         
         history = self.measurement_history[measurement_idx]
-        if len(history) < 3:
+        if len(history) < 5:
             return  # Need more history
         
         # Detect and handle outliers using median filter
@@ -234,7 +234,7 @@ class DistanceKFNode(Node):
         
         # If current estimate is far from median, pull it back
         current_estimate = self.distance_estimates[measurement_idx]
-        if abs(current_estimate - median_val) > 3 * mad and mad > 0.01:
+        if abs(current_estimate - median_val) > 3 * mad and mad > 0.01: # cut out the values of the Gaussian pdf tails 
             # Outlier detected, use median filter result
             self.distance_estimates[measurement_idx] = median_val
             # Increase uncertainty due to outlier

@@ -1,0 +1,107 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <model name="turtlebot3_burger_no_sensors">
+
+    <link name="base">
+      <inertial>
+        <mass>1.0</mass>
+      </inertial>
+      <collision name="base_collision">
+        <geometry>
+          <box><size>0.14 0.14 0.14</size></box>
+        </geometry>
+      </collision>
+      <visual name="base_visual">
+        <geometry>
+          <mesh>
+            <uri>model://turtlebot3_burger/meshes/burger_base.dae</uri>
+            <scale>0.001 0.001 0.001</scale>
+          </mesh>
+        </geometry>
+      </visual>
+    </link>
+
+    <link name="left_wheel">
+      <inertial><mass>0.1</mass></inertial>
+      <collision name="left_wheel_collision">
+        <geometry>
+          <cylinder><radius>0.033</radius><length>0.018</length></cylinder>
+        </geometry>
+      </collision>
+      <visual name="left_wheel_visual">
+        <geometry>
+          <mesh>
+            <uri>model://turtlebot3_burger/meshes/left_tire.dae</uri>
+            <scale>0.001 0.001 0.001</scale>
+          </mesh>
+        </geometry>
+      </visual>
+    </link>
+
+    <link name="right_wheel">
+      <inertial><mass>0.1</mass></inertial>
+      <collision name="right_wheel_collision">
+        <geometry>
+          <cylinder><radius>0.033</radius><length>0.018</length></cylinder>
+        </geometry>
+      </collision>
+      <visual name="right_wheel_visual">
+        <geometry>
+          <mesh>
+            <uri>model://turtlebot3_burger/meshes/right_tire.dae</uri>
+            <scale>0.001 0.001 0.001</scale>
+          </mesh>
+        </geometry>
+      </visual>
+    </link>
+
+    <!-- Giunti -->
+    <joint name="left_wheel_joint" type="revolute">
+      <parent>base</parent>
+      <child>left_wheel</child>
+      <axis><xyz>0 1 0</xyz></axis>
+    </joint>
+
+    <joint name="right_wheel_joint" type="revolute">
+      <parent>base</parent>
+      <child>right_wheel</child>
+      <axis><xyz>0 1 0</xyz></axis>
+    </joint>
+
+    <!-- Lidar solo come decorazione -->
+    <link name="lidar">
+      <visual name="lidar_visual">
+        <geometry>
+          <mesh>
+            <uri>model://turtlebot3_burger/meshes/lds.dae</uri>
+            <scale>0.001 0.001 0.001</scale>
+          </mesh>
+        </geometry>
+      </visual>
+    </link>
+
+    <joint name="lidar_joint" type="fixed">
+      <parent>base</parent>
+      <child>lidar</child>
+    </joint>
+
+    <!-- 👇 Plugin per farlo muovere -->
+    <plugin name="turtlebot3_diff_drive" filename="libgazebo_ros_diff_drive.so">
+      <ros>
+        <namespace>/</namespace>
+        <remapping>cmd_vel:=cmd_vel</remapping>
+        <remapping>odom:=odom</remapping>
+      </ros>
+      <update_rate>50</update_rate>
+      <left_joint>left_wheel_joint</left_joint>
+      <right_joint>right_wheel_joint</right_joint>
+      <wheel_separation>0.160</wheel_separation>
+      <wheel_diameter>0.066</wheel_diameter>
+      <publish_odom>true</publish_odom>
+      <publish_odom_tf>true</publish_odom_tf>
+      <odometry_frame>odom</odometry_frame>
+      <robot_base_frame>base</robot_base_frame>
+    </plugin>
+
+  </model>
+</sdf>

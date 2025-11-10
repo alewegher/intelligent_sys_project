@@ -31,7 +31,6 @@ class ControllerClass : public rclcpp::Node{
             // Create publishers for debug/monitoring
             kf_filtered_robot_pose_pub = this->create_publisher<std_msgs::msg::Float64MultiArray>("kf_filtered_robot_pose", 10);
             tracking_error_pub = this->create_publisher<std_msgs::msg::Float64MultiArray>("tracking_error", 10);
-            position_comparison_pub = this->create_publisher<std_msgs::msg::Float64MultiArray>("position_comparison", 10);
             desired_trajectory_pub = this->create_publisher<std_msgs::msg::Float64MultiArray>("desired_trajectory_array", 10);
 
             // Create subscribers for filtered UWB data
@@ -48,24 +47,12 @@ class ControllerClass : public rclcpp::Node{
                 "/desired_trajectory", 10,
                 std::bind(&ControllerClass::trajectory_callback, this, std::placeholders::_1));
             
-            // Subscribers for ground truth odometry from Gazebo (for debugging)
-            odom_robot1_sub = this->create_subscription<nav_msgs::msg::Odometry>(
-                "/odom", 10,
-                std::bind(&ControllerClass::odom_robot1_callback, this, std::placeholders::_1));
-            
-            odom_robot2_sub = this->create_subscription<nav_msgs::msg::Odometry>(
-                "/tb3_2/odom", 10,
-                std::bind(&ControllerClass::odom_robot2_callback, this, std::placeholders::_1));
-            
-            odom_robot3_sub = this->create_subscription<nav_msgs::msg::Odometry>(
-                "/tb3_3/odom", 10,
-                std::bind(&ControllerClass::odom_robot3_callback, this, std::placeholders::_1));
+
 
             // Initialize robot states
             robot_positions.resize(3, Eigen::Vector2d::Zero());
             robot_velocities.resize(3, Eigen::Vector2d::Zero());
             inter_robot_distances.resize(3, Eigen::Vector2d::Zero());
-            gazebo_positions.resize(3, Eigen::Vector2d::Zero());
             
             // Initialize anchor positions from sensor config
             load_anchor_positions();
@@ -298,9 +285,6 @@ class ControllerClass : public rclcpp::Node{
             // Publish tracking error (desired vs estimated centroid)
             publish_tracking_error();
             
-            // Publish position comparison (Gazebo ground truth vs trilateration)
-            publish_position_comparison();
-            
             // Compute and publish velocity commands for each robot
             for(int i = 0; i < 3; i++) {
                 // Formation control
@@ -358,7 +342,7 @@ class ControllerClass : public rclcpp::Node{
                 
                 // Skip if out of range (marked as -1.0)
                 if(d1 < 0 || d2 < 0 || d3 < 0) {
-                    RCLCPP_DEBUG(this->get_logger(), "Robot %d has out-of-range distances, skipping", robot_idx);
+                    RCLCPP_DEBUG(this->get_logger(), "Robot %d has out-of-range distances, skipping", (int)robot_idx);
                     continue;
                 }
                 
@@ -404,19 +388,6 @@ class ControllerClass : public rclcpp::Node{
                 avg_dist, desired_distance);
         }
 
-        // Odometry callbacks for ground truth from Gazebo (for debugging)
-        void odom_robot1_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
-            gazebo_positions[0] = Eigen::Vector2d(msg->pose.pose.position.x, msg->pose.pose.position.y);
-        }
-        
-        void odom_robot2_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
-            gazebo_positions[1] = Eigen::Vector2d(msg->pose.pose.position.x, msg->pose.pose.position.y);
-        }
-        
-        void odom_robot3_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
-            gazebo_positions[2] = Eigen::Vector2d(msg->pose.pose.position.x, msg->pose.pose.position.y);
-        }
-
         // Publish tracking error (desired vs estimated centroid)
         void publish_tracking_error() {
             // Calculate estimated centroid from trilateration
@@ -433,34 +404,6 @@ class ControllerClass : public rclcpp::Node{
             RCLCPP_DEBUG(this->get_logger(), "Tracking error: [%.3f, %.3f]m (norm: %.3f m)",
                 position_error.x(), position_error.y(), position_error.norm());
         }
-        
-        // Publish position comparison (Gazebo ground truth vs trilateration estimate)
-        void publish_position_comparison() {
-            auto msg = std_msgs::msg::Float64MultiArray();
-            
-            // Format: [gazebo_r1_x, gazebo_r1_y, trilat_r1_x, trilat_r1_y, error_r1,
-            //          gazebo_r2_x, gazebo_r2_y, trilat_r2_x, trilat_r2_y, error_r2,
-            //          gazebo_r3_x, gazebo_r3_y, trilat_r3_x, trilat_r3_y, error_r3]
-            msg.data.resize(15);
-            
-            for(int i = 0; i < 3; i++) {
-                msg.data[i*5 + 0] = gazebo_positions[i].x();
-                msg.data[i*5 + 1] = gazebo_positions[i].y();
-                msg.data[i*5 + 2] = robot_positions[i].x();
-                msg.data[i*5 + 3] = robot_positions[i].y();
-                
-                // Calculate error
-                Eigen::Vector2d error = gazebo_positions[i] - robot_positions[i];
-                msg.data[i*5 + 4] = error.norm();
-            }
-            
-            position_comparison_pub->publish(msg);
-            
-            // Log
-            double avg_error = (msg.data[4] + msg.data[9] + msg.data[14]) / 3.0;
-            RCLCPP_INFO(this->get_logger(), "📍 Position errors (Gazebo vs Trilat): R1:%.3fm R2:%.3fm R3:%.3fm (avg:%.3fm)",
-                msg.data[4], msg.data[9], msg.data[14], avg_error);
-        }
 
 
 
@@ -475,7 +418,6 @@ class ControllerClass : public rclcpp::Node{
         // Publishers for monitoring
         rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr kf_filtered_robot_pose_pub;
         rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr tracking_error_pub;
-        rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr position_comparison_pub;
         rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr desired_trajectory_pub;
 
         // Subscribers for UWB filtered data
@@ -484,11 +426,6 @@ class ControllerClass : public rclcpp::Node{
         
         // Subscriber for desired trajectory from planner
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr trajectory_sub;
-        
-        // Subscribers for ground truth from Gazebo (for debugging)
-        rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_robot1_sub;
-        rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_robot2_sub;
-        rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_robot3_sub;
 
         // Control timer (50 Hz)
         rclcpp::TimerBase::SharedPtr control_timer;
@@ -497,9 +434,6 @@ class ControllerClass : public rclcpp::Node{
         std::vector<Eigen::Vector2d> robot_positions;        // Estimated from trilateration
         std::vector<Eigen::Vector2d> robot_velocities;       // Could be estimated or measured
         std::vector<Eigen::Vector2d> inter_robot_distances;  // Distances between robots
-        
-        // Ground truth positions from Gazebo odometry (for debugging)
-        std::vector<Eigen::Vector2d> gazebo_positions;       // True positions from Gazebo
         
         // Anchor positions (loaded from config)
         std::vector<Eigen::Vector3d> anchor_positions;
