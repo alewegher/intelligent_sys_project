@@ -18,21 +18,15 @@ def generate_launch_description():
     """
 
     # --- CONFIGURAZIONE BAG RECORDING ---
-    # Definisci il nome del pacchetto
     pkg_name = 'int_sys_fp'
     
-    # Genera un nome univoco per la bag usando data e ora (evita errori di sovrascrittura)
-    # Formato compatibile con Windows (niente due punti nel nome file)
     timestamp = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
     bag_name = f'int_sys_sim_bag_{timestamp}'
 
-    # Percorso di salvataggio: all'interno della cartella 'bags' del pacchetto installato
-    # NOTA: Se preferisci salvarlo nella home, cambia in os.path.expanduser('~')
     pkg_share = get_package_share_directory(pkg_name)
     bag_output_dir_base = os.path.join(pkg_share, 'bags')
     bag_output_dir = os.path.join(bag_output_dir_base, bag_name)
     
-    # Lista dei topic da registrare
     topics_to_record = [
         '/centroid_position',
         '/cmd_vel',
@@ -49,7 +43,7 @@ def generate_launch_description():
         '/kf_filtered_robot_pose'
     ]
     
-    # --- NUOVO: Crea la directory 'bags' se non esiste (per prevenire fallimenti)
+    # Crea la directory 'bags' se non esiste (necessario per ros2 bag record)
     create_bags_dir = ExecuteProcess(
         cmd=['mkdir', '-p', bag_output_dir_base],
         output='screen',
@@ -57,14 +51,21 @@ def generate_launch_description():
     )
 
     # Processo di registrazione (con durata limitata a 120s)
-    # AGGIUNTO: '--use-sim-time' per sincronizzarsi con Gazebo
+    # FIX V3: Torniamo al formato lista, ma assicuriamo il comando sia corretto.
+    # L'errore potrebbe essere causato dal fatto che `ros2` non è nel PATH del processo.
+    bag_record_cmd = [
+        'ros2', 'bag', 'record', 
+        '--use-sim-time', 
+        '-o', bag_output_dir#, 
+        #'--duration', '120s'
+    ] + topics_to_record
+    
     bag_record_process = ExecuteProcess(
-        cmd=['ros2', 'bag', 'record', 
-             '--use-sim-time', # <--- FIX: Usa il tempo della simulazione!
-             '-o', bag_output_dir, 
-             '--duration', '120s'] + topics_to_record,
+        cmd=bag_record_cmd,
         output='screen',
-        shell=False
+        # Rimuoviamo shell=True in questo tentativo, poiché a volte interferisce con il PATH
+        # Inseriamo un ritardo minimo per la registrazione, nel caso in cui i topic non siano subito disponibili
+        # Lo avvieremo dopo la creazione della cartella
     )
     # -------------------------------------
 
@@ -97,7 +98,6 @@ def generate_launch_description():
     set_tb3_model = SetEnvironmentVariable('TURTLEBOT3_MODEL', 'burger')
 
     # Include Gazebo without any robot pre-spawned
-    # We use gazebo_ros package directly instead of empty_world to avoid auto-spawning
     gazebo_ros_share = get_package_share_directory('gazebo_ros')
     tb3_gz_share = get_package_share_directory('turtlebot3_gazebo')
     
@@ -220,6 +220,12 @@ def generate_launch_description():
         emulate_tty=True,
         condition=IfCondition(LaunchConfiguration('enable_planner'))
     )
+    
+    # Ritardiamo l'avvio della registrazione di 5 secondi per garantire che tutti i nodi siano attivi
+    delayed_bag_record_process = TimerAction(
+        period=5.0,
+        actions=[bag_record_process]
+    )
 
     ld = LaunchDescription([
         uwb_frequency_arg,
@@ -227,10 +233,10 @@ def generate_launch_description():
         enable_planner_arg,
         use_cpp_kf_arg,
         set_tb3_model,
-        # Prima crea la directory 'bags', poi avvia la registrazione
+        
+        # 1. Crea la directory
         create_bags_dir,
-        bag_record_process,
-        # Avvia il resto della simulazione
+        # 2. Avvia il resto della simulazione
         gazebo_launch,
         gzclient_launch,
         spawn_tb3_1,
@@ -240,7 +246,10 @@ def generate_launch_description():
         controller_node,
         kf_python_node,
         kf_cpp_node,
-        planner_node
+        planner_node,
+        
+        # 4. Avvia la registrazione con un ritardo
+        delayed_bag_record_process
     ])
 
     return ld
