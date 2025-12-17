@@ -29,8 +29,9 @@ def generate_launch_description():
     # Percorso di salvataggio: all'interno della cartella 'bags' del pacchetto installato
     # NOTA: Se preferisci salvarlo nella home, cambia in os.path.expanduser('~')
     pkg_share = get_package_share_directory(pkg_name)
-    bag_output_dir = os.path.join(pkg_share, 'bags', bag_name)
-
+    bag_output_dir_base = os.path.join(pkg_share, 'bags')
+    bag_output_dir = os.path.join(bag_output_dir_base, bag_name)
+    
     # Lista dei topic da registrare
     topics_to_record = [
         '/centroid_position',
@@ -47,10 +48,19 @@ def generate_launch_description():
         '/desired_trajectory',
         '/kf_filtered_robot_pose'
     ]
+    
+    # --- NUOVO: Crea la directory 'bags' se non esiste (per prevenire fallimenti)
+    create_bags_dir = ExecuteProcess(
+        cmd=['mkdir', '-p', bag_output_dir_base],
+        output='screen',
+        shell=False
+    )
 
     # Processo di registrazione (con durata limitata a 120s)
+    # AGGIUNTO: '--use-sim-time' per sincronizzarsi con Gazebo
     bag_record_process = ExecuteProcess(
         cmd=['ros2', 'bag', 'record', 
+             '--use-sim-time', # <--- FIX: Usa il tempo della simulazione!
              '-o', bag_output_dir, 
              '--duration', '120s'] + topics_to_record,
         output='screen',
@@ -201,9 +211,9 @@ def generate_launch_description():
         executable='trajectory_planner.py',
         name='trajectory_planner',
         parameters=[
-            {'radius': 5.0},             # Circle radius in meters (outside anchor area)
+            {'radius': 5.0},              # Circle radius in meters (outside anchor area)
             {'angular_velocity': 0.05},    # rad/s (slower for large radius)
-            {'update_rate': 50.0},        # Hz (same as controller)
+            {'update_rate': 50.0},         # Hz (same as controller)
             {'use_sim_time': True}
         ],
         output='screen',
@@ -217,7 +227,8 @@ def generate_launch_description():
         enable_planner_arg,
         use_cpp_kf_arg,
         set_tb3_model,
-        # Avvia la registrazione in parallelo
+        # Prima crea la directory 'bags', poi avvia la registrazione
+        create_bags_dir,
         bag_record_process,
         # Avvia il resto della simulazione
         gazebo_launch,
