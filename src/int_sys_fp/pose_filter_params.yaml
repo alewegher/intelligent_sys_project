@@ -11,8 +11,21 @@ pose_filter:
   initial_covariance:
     p0_scale: 10.0      # P0 = p0_scale * I(3); x0 = [0,0,0] (zero-mean, inflated covariance)
 
+  # Scaled unscented transform parameters. With L=3 (state [x,y,theta]):
+  #   lambda = alpha^2 * (L + kappa) - L,  sigma-point spread = sqrt(L + lambda)
+  # Heuristics: kappa = 3 - L (Julier) -> 0 here; beta = 2 is optimal for Gaussians;
+  # alpha in [1e-3, 1].
+  #
+  # IMPORTANT: alpha -> 0 makes the scaled UT converge EXACTLY to the EKF's
+  # linearisation - a known mathematical property, not a bug. The previous default of
+  # 1e-3 gave lambda = -2.999997, a sigma spread of 1.7e-3*chol(P) and weights of order
+  # 1e6, i.e. an EKF in disguise: an EKF-vs-UKF comparison could not show any
+  # difference. alpha = 1.0 gives lambda = 0, spread sqrt(3) ~ 1.73 sigma, and weights
+  # Wm0 = 0, Wmi = Wci = 1/6, Wc0 = 2 - all well conditioned, none negative.
+  # (alpha ~ 0.5 gives a NEGATIVE Wm0, which can make P indefinite.)
+  # Keep alpha = 1e-3 available as the deliberate "degenerate to EKF" control case.
   ukf:
-    alpha: 1.0e-3
+    alpha: 1.0
     beta: 2.0
     kappa: 0.0
 

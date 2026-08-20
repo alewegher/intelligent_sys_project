@@ -1,6 +1,11 @@
+# Uniform-noise variant of sensor_params.yaml, selected with noise_type:=2.
+# Anchor positions MUST match sensor_params.yaml: the geometry is a property of the
+# environment, not of the noise model, and the pose filters build their measurement
+# model from these coordinates. (Anchor 1 used to sit at [-10,0,0] here, which gave
+# the filter a 10 m systematic model error whenever noise_type:=2 was used.)
 UWB_sensor:
   anchor 1:
-    position: [-10.0, 0.0, 0.0]
+    position: [0.0, 0.0, 0.0]
     orientation: [0.0, 0.0, 0.0]
     max range : 150 # m
     min range : 0.1 # m

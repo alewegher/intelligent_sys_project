@@ -15,10 +15,11 @@ import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, TimerAction, ExecuteProcess
+from launch.actions import DeclareLaunchArgument, TimerAction, ExecuteProcess, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch.conditions import IfCondition
-from simulation_common import declare_common_args, build_simulation_actions, BAG_TOPICS
+from simulation_common import (declare_common_args, build_simulation_actions,
+                               validate_config, BAG_TOPICS)
 
 
 def generate_launch_description():
@@ -44,6 +45,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         *declare_common_args(),
+        OpaqueFunction(function=validate_config),
         enable_bag_record_arg,
         create_bags_dir,
         *build_simulation_actions(),

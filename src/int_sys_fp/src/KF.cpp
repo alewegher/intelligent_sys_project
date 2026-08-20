@@ -88,15 +88,24 @@ private:
     
     // Measurement history for outlier detection
     std::vector<std::deque<double>> measurement_history_;
-    static constexpr int MAX_HISTORY_LENGTH = 10;
-    
+
     // Sensor parameters
     std::vector<double> sensor_anchor_std_;
     std::vector<double> sensor_robot_std_;
     
     // KF parameters
     bool outlier_detection_enabled_;
-    
+
+    // MAD outlier detector, all ROS parameters (see parse_kf_parameters)
+    int    mad_window_;
+    int    mad_min_history_;
+    int    mad_history_length_;
+    double mad_kappa_;
+    double mad_floor_;
+    double mad_cov_inflation_;
+    double mad_scale_;
+    long   outlier_events_ = 0;   // cumulative count, logged periodically
+
     // ROS interfaces
     rclcpp::Subscription<int_sys_fp::msg::AnchorDist>::SharedPtr uwb_anchor_sub_;
     rclcpp::Subscription<int_sys_fp::msg::RobotDist>::SharedPtr uwb_robot_sub_;
@@ -139,12 +148,39 @@ private:
             sensor_robot_std_ = {0.05, 0.05, 0.05};
         }
         
-        // Default KF parameters
-        distance_process_noise_ = 0.01;
-        rate_process_noise_ = 0.1;
-        outlier_detection_enabled_ = true;
-        
-        RCLCPP_INFO(this->get_logger(), "Using default KF parameters: process_noise, outlier_detection");
+        // KF and MAD settings as ROS parameters. Every default below reproduces exactly
+        // the value that used to be hardcoded here or inside apply_advanced_filtering(),
+        // so an unconfigured run behaves as before.
+        //
+        // Deliberately ROS parameters rather than YAML: the package's YAML files are read
+        // from the installed share/ directory, so changing them needs a rebuild - and an
+        // experimental axis you have to rebuild to sweep is not an axis. (Note UKF_params.yaml
+        // documents an outlier_detection block, but no node has ever read that file.)
+        distance_process_noise_ = declare_parameter<double>("distance_process_noise", 0.01);
+        rate_process_noise_     = declare_parameter<double>("rate_process_noise", 0.1);
+        outlier_detection_enabled_ = declare_parameter<bool>("mad_enabled", true);
+        mad_window_             = declare_parameter<int>("mad_window", 5);
+        mad_min_history_        = declare_parameter<int>("mad_min_history", 3);
+        mad_history_length_     = declare_parameter<int>("mad_history_length", 10);
+        mad_kappa_              = declare_parameter<double>("mad_kappa", 3.0);
+        mad_floor_              = declare_parameter<double>("mad_floor", 0.01);
+        mad_cov_inflation_      = declare_parameter<double>("mad_cov_inflation", 1.5);
+        // Gaussian-consistency factor. The threshold is kappa * mad_scale * MAD. With
+        // mad_scale = 1.0 (the historical behaviour) "3*MAD" is really ~2.02 sigma, NOT
+        // 3 sigma - the consistent estimator of sigma is 1.4826*MAD. Set mad_scale:=1.4826
+        // for a true 3-sigma rule. Default kept at 1.0 so behaviour is unchanged.
+        mad_scale_              = declare_parameter<double>("mad_scale", 1.0);
+
+        mad_history_length_ = std::max(1, mad_history_length_);
+        mad_window_         = std::max(1, mad_window_);
+        mad_min_history_    = std::max(1, std::min(mad_min_history_, mad_history_length_));
+
+        RCLCPP_INFO(this->get_logger(),
+            "KF: q=%.4f | MAD: %s window=%d min_hist=%d hist=%d kappa=%.2f scale=%.4f "
+            "floor=%.4f inflation=%.2f (effective threshold = %.3f*MAD)",
+            distance_process_noise_, outlier_detection_enabled_ ? "on" : "off",
+            mad_window_, mad_min_history_, mad_history_length_, mad_kappa_, mad_scale_,
+            mad_floor_, mad_cov_inflation_, mad_kappa_ * mad_scale_);
     }
     
     void initialize_kf_state() {
@@ -202,15 +238,20 @@ private:
     void update() {
         try {
             // Run Gaussian filtering
-            gaussian_filtering();
-            
+            const bool filtered = gaussian_filtering();
+
             // Apply outlier detection
             if(outlier_detection_enabled_) {
                 for(int i = 0; i < TOTAL_MEASUREMENTS; i++) {
                     apply_advanced_filtering(i);
                 }
             }
-            
+
+            // Publish only after the MAD pass, so the correction is visible in the same cycle
+            if(filtered) {
+                publish_filtered_results();
+            }
+
             // Log statistics
             int valid_count = (distance_estimates_.array() > 0.01).count();
             if(valid_count > 0) {
@@ -228,7 +269,13 @@ private:
                 RCLCPP_DEBUG(this->get_logger(), "Distance stats - Avg: %.2fm, Uncertainty: %.4f",
                     avg_distance, avg_uncertainty);
             }
-            
+
+            // How often MAD actually fires is the first thing you need when interpreting
+            // a "MAD on vs off" comparison - if this stays at 0, the two configurations
+            // are measuring the same thing.
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
+                "MAD outlier corrections so far: %ld", outlier_events_);
+
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(), "Error in distance filtering: %s", e.what());
         }
@@ -279,23 +326,27 @@ private:
         return z;
     }
     
-    void gaussian_filtering() {
+    /// @return true if measurements were available and the estimates were updated.
+    bool gaussian_filtering() {
         if(!has_measurements()) {
             RCLCPP_DEBUG(this->get_logger(), "No measurements available for filtering");
-            return;
+            return false;
         }
-        
+
         VectorXd raw_measurements = get_measurement_vector();
-        
+
         // Apply scalar Kalman filter to each distance
         for(int i = 0; i < TOTAL_MEASUREMENTS; i++) {
             if(raw_measurements(i) > 0.01) {
                 filter_single_distance(i, raw_measurements(i));
             }
         }
-        
-        // Publish results
-        publish_filtered_results();
+
+        // NOTE: publishing deliberately happens in update(), AFTER the MAD pass. It used
+        // to happen here, which meant an outlier correction only reached subscribers on
+        // the following cycle - so any "MAD on vs off" comparison was measuring a
+        // one-cycle-delayed effect rather than the correction itself.
+        return true;
     }
     
     void filter_single_distance(int measurement_idx, double raw_distance) {
@@ -326,7 +377,7 @@ private:
         
         // Update history
         auto& history = measurement_history_[measurement_idx];
-        if(history.size() >= MAX_HISTORY_LENGTH) {
+        while(static_cast<int>(history.size()) >= mad_history_length_) {
             history.pop_front();
         }
         history.push_back(raw_distance);
@@ -338,17 +389,32 @@ private:
         // }
     }
     
+    /**
+     * @brief MAD-based outlier correction on one distance channel.
+     *
+     * Note what this actually compares: the history holds the RAW measurements, but the
+     * value tested against their median is the KF ESTIMATE. So this detects "the estimate
+     * has drifted away from recent raw data", not "this measurement is an outlier" - the
+     * reverse of the reference paper, which screens the raw measurement before filtering.
+     * Kept as-is (mad_stage would be the place to add the paper's variant) but worth
+     * knowing before interpreting any MAD result.
+     *
+     * With an even-sized window, recent[n/2] takes the UPPER middle element rather than
+     * averaging the two middles. Irrelevant at the default window of 5, visible at 4.
+     */
     void apply_advanced_filtering(int measurement_idx) {
         const auto& history = measurement_history_[measurement_idx];
-        if(history.size() < 3) return;
-        
+        if(static_cast<int>(history.size()) < mad_min_history_) return;
+
         // Get recent measurements
-        std::vector<double> recent(history.end() - std::min(5, static_cast<int>(history.size())), history.end());
-        
+        std::vector<double> recent(
+            history.end() - std::min(mad_window_, static_cast<int>(history.size())),
+            history.end());
+
         // Calculate median
         std::sort(recent.begin(), recent.end());
         double median_val = recent[recent.size() / 2];
-        
+
         // Calculate MAD (Median Absolute Deviation)
         std::vector<double> deviations;
         for(double val : recent) {
@@ -356,14 +422,16 @@ private:
         }
         std::sort(deviations.begin(), deviations.end());
         double mad = deviations[deviations.size() / 2];
-        
+
         // Check for outlier
         double current_estimate = distance_estimates_(measurement_idx);
-        if(std::abs(current_estimate - median_val) > 3.0 * mad && mad > 0.01) {
+        if(std::abs(current_estimate - median_val) > mad_kappa_ * mad_scale_ * mad
+           && mad > mad_floor_) {
             // Outlier detected
             distance_estimates_(measurement_idx) = median_val;
-            distance_covariances_(measurement_idx) *= 1.5;
-            
+            distance_covariances_(measurement_idx) *= mad_cov_inflation_;
+            outlier_events_++;
+
             RCLCPP_DEBUG(this->get_logger(), "Outlier correction applied to measurement %d", measurement_idx);
         }
     }

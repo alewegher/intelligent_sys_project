@@ -11,7 +11,7 @@
 #include <eigen3/Eigen/Dense>
 #include <fstream>
 #include <random>
-#include <algorithm>        
+#include <algorithm>
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "std_msgs/msg/float64_multi_array.hpp"
@@ -456,7 +456,7 @@ class UWBNodeClass : public rclcpp::Node{
         std::vector<std::vector<double>> robot_sensor_ranges_;      // Sensor ranges for each robot
         
         std::random_device rd_;               // generate the seed for the random number generator
-        std::mt19937 gen_{rd_()};             // generated sequence based on Marsenne-Twister 
+        std::mt19937 gen_{rd_()};             // generated sequence based on Marsenne-Twister
 
         // YAML configuration choice - usando ament_index per trovare i file
         std::string package_share_directory = ament_index_cpp::get_package_share_directory("int_sys_fp");

@@ -11,11 +11,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from launch import LaunchDescription
-from simulation_common import declare_common_args, build_simulation_actions
+from launch.actions import OpaqueFunction
+from simulation_common import declare_common_args, build_simulation_actions, validate_config
 
 
 def generate_launch_description():
     return LaunchDescription([
         *declare_common_args(),
+        OpaqueFunction(function=validate_config),
         *build_simulation_actions(),
     ])
