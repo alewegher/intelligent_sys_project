@@ -90,16 +90,24 @@ All installed to `install/int_sys_fp/share/int_sys_fp/` and loaded at runtime (n
 
 ## Launch
 
+Two entry points, both launching Gazebo + 3 TurtleBot3 robots (robot 0 at origin unnamespaced, robots 1/2 under `/tb3_2`, `/tb3_3`), the UWB emulator, 3 `regulator_node` instances, 3 `pose_ekf_node`/`pose_ukf_node` instances (per `filter_type`), the trajectory planner, and PlotJuggler for live plots. They share their setup via `simulation_common.py` and differ only in bag recording:
+
 ```bash
+# Demo — no bag recording
 ros2 launch int_sys_fp synchronized_system.launch.py \
   filter_type:=ekf \          # 'ekf' or 'ukf' — pose filter used by all 3 robots
   uwb_frequency:=50.0 \
-  noise_type:=1 \              # 1=Gaussian, 2=Uniform
+  noise_type:=1 \               # 1=Gaussian, 2=Uniform
   enable_planner:=true \
-  enable_legacy_kf:=false      # also launch the legacy distance_kf_node baseline
+  enable_legacy_kf:=false \     # also launch the legacy distance_kf_node baseline
+  enable_plotjuggler:=true
+
+# Same system + ros2 bag record (for offline/Matlab analysis) — same args, plus:
+ros2 launch int_sys_fp synchronized_system_with_bag.launch.py \
+  enable_bag_record:=true
 ```
 
-This spawns Gazebo + 3 TurtleBot3 robots (robot 0 at origin unnamespaced, robots 1/2 under `/tb3_2`, `/tb3_3`), the UWB emulator, 3 `regulator_node` instances, 3 `pose_ekf_node` or `pose_ukf_node` instances (per `filter_type`), and the trajectory planner.
+The bag-recording variant writes to `~/ros2_ws/bags/int_sys_sim_<timestamp>/` (workspace root, not `install/`, so it survives a clean rebuild), starting 16s in (once robots are spawned). It records `pose_debug`, `pose_estimate`, `fsm_state`, `tracking_error`, `centroid_position`, `odom`, `imu`, `cmd_vel`, UWB and trajectory topics for all 3 robots — the full list is `BAG_TOPICS` in `simulation_common.py`.
 
 ## Monitoring and debugging
 
@@ -144,13 +152,17 @@ ros2 run rqt_graph rqt_graph
 - **Robots drift apart during tracking**: increase `Kf` (formation gain during TRACKING) in `Regulator_node.cpp`, or shorten `phase_transition_ramp_s` in `controller.yaml`.
 - **θ estimate drifts or stays near 0**: check `/imu` is actually publishing (`ros2 topic echo /imu --once`) — pose filters need it for θ correction, UWB distances alone cannot observe θ.
 - **Pose covariance never shrinks / diverges**: check `pose_filter_params.yaml`'s `Q` isn't too large relative to the measurement noise in `sensor_params.yaml`.
+- **PlotJuggler doesn't start / `plotjuggler: command not found`**: `sudo apt install ros-humble-plotjuggler ros-humble-plotjuggler-ros`, or launch with `enable_plotjuggler:=false` to skip it.
+- **Bag directory missing / permission error**: the bag-recording launch file creates `~/ros2_ws/bags/` automatically; if it still fails, check `~/ros2_ws` is writable, or set `enable_bag_record:=false`.
 
 ## Project structure
 
 ```
 int_sys_fp/
 ├── launch/
-│   └── synchronized_system.launch.py   # Gazebo + 3× (regulator_node, pose_ekf/ukf_node) + uwb_emulator + planner
+│   ├── synchronized_system.launch.py           # Demo: sim + PlotJuggler, no bag recording
+│   ├── synchronized_system_with_bag.launch.py  # Same sim + PlotJuggler + ros2 bag record (for offline/Matlab analysis)
+│   └── simulation_common.py                    # Shared Gazebo/spawn/controller/filter/PlotJuggler setup (not a launch file itself)
 ├── src/
 │   ├── UWB_utils_emulator.cpp          # uwb_emulator
 │   ├── PoseEKF_node.cpp                # pose_ekf_node — per-robot pose EKF
