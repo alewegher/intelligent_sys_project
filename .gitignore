@@ -1,44 +1,25 @@
-# ----------------------------------------------------
-# 🚫 Output di Colcon e CMake (CRUCIALE)
-# ----------------------------------------------------
-
-# Cartelle generate da colcon nella radice del workspace o del package
 **/build/
 **/install/
 **/log/
 
-# File di cache di CMake
 **/CMakeCache.txt
 **/CMakeFiles/
 **/Makefile
 cmake_install.cmake
 
-# File del pacchetto ROS 2 generati in fase di build
-# Messaggi custom e service generati:
-# Questa cartella viene generata da rosidl_generate_interfaces e messa in 'build'
-# ma a volte possono apparire altrove se la build è stata interrotta male.
 generated/
 
-# ----------------------------------------------------
-# 🐍 Python Bytecode e Ambienti Virtuali
-# ----------------------------------------------------
-
-# Bytecode Python (generato quando si esegue codice Python)
 *.pyc
 __pycache__/
 
-# Ambienti virtuali Python
 .venv/
 env/
 
-# ----------------------------------------------------
-# 💻 Configurazione Editor/IDE Comuni (Opzionale)
-# ----------------------------------------------------
-
-# Visual Studio Code
 .vscode/
-# JetBrains IDE (CLion, PyCharm, etc.)
 .idea/
-# File di swap Vim
 *.swp
 *~
+
+.claude/
+bags/
+plotjuggler_images/
