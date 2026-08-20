@@ -1,24 +1,21 @@
 /**
- * @file UKF.cpp
- * @brief Per-robot Unscented Kalman Filter estimating pose [x,y,theta].
+ * @file PoseEKF_node.cpp
+ * @brief Per-robot Extended Kalman Filter estimating pose [x,y,theta].
  *
- * Sigma-point machinery unchanged from the original distance-filtering version
- * (Wan & Van Der Merwe, 2000) - only predict()/update() changed: sigma points
- * are now propagated through the unicycle process model f(x,u) and the
- * UWB+IMU measurement model h(x) from pose_dynamics.hpp, instead of the
- * previous identity propagation (see plan's item 3).
+ * Predict: unicycle model f(x,u), u=[v_cmd, omega_imu] (see pose_dynamics.hpp).
+ * Update: h(x) = [3 anchor distances, 2 neighbor distances, theta_imu] (one-step
+ * Riccati recursion, gain recomputed every cycle since F_k/H_k depend on theta_k -
+ * no DARE/idare solve, see plan's "Nota tecnica importante").
  *
- * One instance per robot, selected via the mandatory 'robot_id' parameter -
- * same distributed pattern as PoseEKF_node.cpp, so the two filters are
- * directly comparable.
+ * One instance per robot, selected via the mandatory 'robot_id' parameter
+ * (0/1/2) - this is what makes the architecture distributed: N independent
+ * node instances instead of one node looping over N robots.
  */
 
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <sensor_msgs/msg/imu.hpp>
-#include <Eigen/Dense>
-#include <Eigen/Cholesky>
 #include <yaml-cpp/yaml.h>
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include "int_sys_fp/msg/anchor_dist.hpp"
@@ -31,134 +28,52 @@
 #include <cmath>
 #include <tuple>
 
-using namespace Eigen;
 using pose_dynamics::State;
 using pose_dynamics::Input;
 
-class UnscentedKalmanFilter {
+class PoseEKF {
 public:
-    UnscentedKalmanFilter(int L, double alpha = 1e-3, double beta = 2.0, double kappa = 0.0)
-        : L_(L), alpha_(alpha), beta_(beta), kappa_(kappa) {
-        lambda_ = alpha_ * alpha_ * (L_ + kappa_) - L_;
-        n_sigma_ = 2 * L_ + 1;
-
-        weights_m_.resize(n_sigma_);
-        weights_c_.resize(n_sigma_);
-        weights_m_(0) = lambda_ / (L_ + lambda_);
-        weights_c_(0) = lambda_ / (L_ + lambda_) + (1.0 - alpha_ * alpha_ + beta_);
-        double w = 0.5 / (L_ + lambda_);
-        for (int i = 1; i < n_sigma_; i++) {
-            weights_m_(i) = w;
-            weights_c_(i) = w;
-        }
-    }
-
-    MatrixXd generateSigmaPoints(const VectorXd& x, const MatrixXd& P) {
-        MatrixXd sigma_pts(L_, n_sigma_);
-        LLT<MatrixXd> llt(P);
-        if (llt.info() != Eigen::Success) {
-            MatrixXd P_reg = P + 1e-9 * MatrixXd::Identity(L_, L_);
-            llt.compute(P_reg);
-        }
-        MatrixXd L_chol = llt.matrixL();
-        MatrixXd scaled_L = std::sqrt(L_ + lambda_) * L_chol;
-
-        sigma_pts.col(0) = x;
-        for (int i = 0; i < L_; i++) {
-            sigma_pts.col(i + 1) = x + scaled_L.col(i);
-            sigma_pts.col(i + L_ + 1) = x - scaled_L.col(i);
-        }
-        return sigma_pts;
-    }
-
-    // Predict: propagate sigma points through the unicycle process model f(x,u)
-    std::pair<VectorXd, MatrixXd> predict(const VectorXd& x, const MatrixXd& P, const Input& u,
-                                           double dt, const MatrixXd& Q) {
-        MatrixXd sigma_pts = generateSigmaPoints(x, P);
-
-        MatrixXd sigma_pts_pred(L_, n_sigma_);
-        for (int i = 0; i < n_sigma_; i++) {
-            sigma_pts_pred.col(i) = pose_dynamics::f(sigma_pts.col(i), u, dt);
-        }
-
-        VectorXd x_pred = VectorXd::Zero(L_);
-        for (int i = 0; i < n_sigma_; i++) x_pred += weights_m_(i) * sigma_pts_pred.col(i);
-        x_pred(2) = pose_dynamics::normalizeAngle(x_pred(2));
-
-        MatrixXd P_pred = MatrixXd::Zero(L_, L_);
-        for (int i = 0; i < n_sigma_; i++) {
-            VectorXd diff = sigma_pts_pred.col(i) - x_pred;
-            diff(2) = pose_dynamics::normalizeAngle(diff(2));
-            P_pred += weights_c_(i) * diff * diff.transpose();
-        }
-        P_pred += Q;
-
+    std::pair<State, Eigen::Matrix3d> predict(const State& x, const Eigen::Matrix3d& P,
+                                               const Input& u, const Eigen::Matrix3d& Q, double dt) {
+        State x_pred = pose_dynamics::f(x, u, dt);
+        Eigen::Matrix3d Fm = pose_dynamics::F(x, u, dt);
+        Eigen::Matrix3d P_pred = Fm * P * Fm.transpose() + Q;
         return {x_pred, P_pred};
     }
 
-    // Update: propagate sigma points through the UWB+IMU measurement model h(x)
-    std::tuple<VectorXd, MatrixXd, VectorXd, VectorXd> update(
-            const VectorXd& x_pred, const MatrixXd& P_pred,
-            const VectorXd& z, const MatrixXd& R,
+    std::tuple<State, Eigen::Matrix3d, Eigen::VectorXd, Eigen::VectorXd> update(
+            const State& x_pred, const Eigen::Matrix3d& P_pred,
+            const Eigen::VectorXd& z, const Eigen::MatrixXd& R,
             const std::array<Eigen::Vector2d, 3>& anchors,
             const std::array<Eigen::Vector2d, 2>& neighbors) {
-        MatrixXd sigma_pts = generateSigmaPoints(x_pred, P_pred);
-        int M = z.size();  // measurement dimension (6: 3 anchors + 2 neighbors + theta)
+        Eigen::VectorXd z_pred = pose_dynamics::h(x_pred, anchors, neighbors);
+        Eigen::MatrixXd Hm = pose_dynamics::H(x_pred, anchors, neighbors);
 
-        MatrixXd sigma_pts_meas(M, n_sigma_);
-        for (int i = 0; i < n_sigma_; i++) {
-            sigma_pts_meas.col(i) = pose_dynamics::h(sigma_pts.col(i), anchors, neighbors);
-        }
+        Eigen::VectorXd innovation = z - z_pred;
+        innovation(5) = pose_dynamics::normalizeAngle(innovation(5));  // theta row
 
-        VectorXd z_pred = VectorXd::Zero(M);
-        for (int i = 0; i < n_sigma_; i++) z_pred += weights_m_(i) * sigma_pts_meas.col(i);
+        Eigen::MatrixXd S = Hm * P_pred * Hm.transpose() + R;
+        Eigen::MatrixXd K = P_pred * Hm.transpose() * S.inverse();
 
-        MatrixXd S = MatrixXd::Zero(M, M);
-        MatrixXd Pxz = MatrixXd::Zero(L_, M);
-        for (int i = 0; i < n_sigma_; i++) {
-            VectorXd diff_z = sigma_pts_meas.col(i) - z_pred;
-            diff_z(5) = pose_dynamics::normalizeAngle(diff_z(5));  // theta row
-            S += weights_c_(i) * diff_z * diff_z.transpose();
-
-            VectorXd diff_x = sigma_pts.col(i) - x_pred;
-            diff_x(2) = pose_dynamics::normalizeAngle(diff_x(2));
-            Pxz += weights_c_(i) * diff_x * diff_z.transpose();
-        }
-        S += R;
-
-        MatrixXd K = Pxz * S.inverse();  // one-step Riccati gain, no DARE (see plan notes)
-
-        VectorXd innovation = z - z_pred;
-        innovation(5) = pose_dynamics::normalizeAngle(innovation(5));
-
-        VectorXd x_upd = x_pred + K * innovation;
+        State x_upd = x_pred + K * innovation;
         x_upd(2) = pose_dynamics::normalizeAngle(x_upd(2));
 
-        MatrixXd P_upd = P_pred - K * S * K.transpose();
-
+        Eigen::Matrix3d I3 = Eigen::Matrix3d::Identity();
+        Eigen::Matrix3d P_upd = (I3 - K * Hm) * P_pred;
         return {x_upd, P_upd, z_pred, innovation};
     }
-
-    int getNumSigmaPoints() const { return n_sigma_; }
-
-private:
-    int L_;
-    double alpha_, beta_, kappa_, lambda_;
-    int n_sigma_;
-    VectorXd weights_m_;
-    VectorXd weights_c_;
 };
 
-class PoseUKFNode : public rclcpp::Node {
+class PoseEKFNode : public rclcpp::Node {
 public:
-    PoseUKFNode() : Node("pose_ukf_node") {
+    PoseEKFNode() : Node("pose_ekf_node") {
         declare_parameter<int>("robot_id", -1);
         robot_id_ = get_parameter("robot_id").as_int();
         if (robot_id_ < 0 || robot_id_ > 2) {
             RCLCPP_FATAL(get_logger(),
                 "robot_id parameter not set (or out of range) - must be 0, 1 or 2. "
                 "This node must be launched with an explicit robot_id.");
-            throw std::runtime_error("pose_ukf_node: missing/invalid robot_id parameter");
+            throw std::runtime_error("pose_ekf_node: missing/invalid robot_id parameter");
         }
 
         topic_prefix_ = pose_dynamics::topicPrefix(robot_id_);
@@ -169,14 +84,10 @@ public:
 
         load_params();
 
-        x_ = VectorXd::Zero(3);
-        P_ = p0_scale_ * MatrixXd::Identity(3, 3);
+        x_ = State::Zero();
+        P_ = p0_scale_ * Eigen::Matrix3d::Identity();
         neighbor_pos_[0] = Eigen::Vector2d::Zero();
         neighbor_pos_[1] = Eigen::Vector2d::Zero();
-
-        ukf_ = std::make_unique<UnscentedKalmanFilter>(3, alpha_, beta_, kappa_);
-        RCLCPP_INFO(get_logger(), "PoseUKF for robot_id=%d started, %d sigma points",
-                    robot_id_, ukf_->getNumSigmaPoints());
 
         cmd_vel_sub_ = create_subscription<geometry_msgs::msg::Twist>(
             topic_prefix_ + "/cmd_vel", 10,
@@ -184,15 +95,15 @@ public:
 
         imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
             topic_prefix_ + "/imu", 10,
-            std::bind(&PoseUKFNode::imu_callback, this, std::placeholders::_1));
+            std::bind(&PoseEKFNode::imu_callback, this, std::placeholders::_1));
 
         anchor_sub_ = create_subscription<int_sys_fp::msg::AnchorDist>(
             "/uwb/anchor_distances", 10,
-            std::bind(&PoseUKFNode::anchor_callback, this, std::placeholders::_1));
+            std::bind(&PoseEKFNode::anchor_callback, this, std::placeholders::_1));
 
         robot_dist_sub_ = create_subscription<int_sys_fp::msg::RobotDist>(
             "/uwb/robot_distances", 10,
-            std::bind(&PoseUKFNode::robot_dist_callback, this, std::placeholders::_1));
+            std::bind(&PoseEKFNode::robot_dist_callback, this, std::placeholders::_1));
 
         for (int k = 0; k < 2; ++k) {
             std::string prefix = pose_dynamics::topicPrefix(neighbor_ids_[k]);
@@ -211,17 +122,17 @@ public:
             topic_prefix_ + "/pose_debug", 10);
 
         timer_ = create_wall_timer(std::chrono::milliseconds(static_cast<int>(dt_ * 1000)),
-                                    std::bind(&PoseUKFNode::step, this));
+                                    std::bind(&PoseEKFNode::step, this));
+
+        RCLCPP_INFO(get_logger(), "PoseEKF for robot_id=%d started (topic prefix '%s')",
+                    robot_id_, topic_prefix_.c_str());
     }
 
 private:
     void load_params() {
-        Q_ = MatrixXd::Identity(3, 3) * 0.001;
+        Q_ = Eigen::Matrix3d::Identity() * 0.001;
         p0_scale_ = 10.0;
         imu_orientation_noise_std_ = 0.02;
-        alpha_ = 1e-3;
-        beta_ = 2.0;
-        kappa_ = 0.0;
         anchor_positions_ = {Eigen::Vector2d(0, 0), Eigen::Vector2d(10, 0), Eigen::Vector2d(0, 10)};
         sensor_anchor_std_ = {0.05, 0.05, 0.05};
         sensor_robot_std_ = {0.05, 0.05, 0.05};
@@ -235,9 +146,6 @@ private:
             Q_(2, 2) = pf["Q"]["theta_var"].as<double>(0.001);
             p0_scale_ = pf["initial_covariance"]["p0_scale"].as<double>(10.0);
             imu_orientation_noise_std_ = pf["imu_orientation_noise_std"].as<double>(0.02);
-            alpha_ = pf["ukf"]["alpha"].as<double>(1e-3);
-            beta_ = pf["ukf"]["beta"].as<double>(2.0);
-            kappa_ = pf["ukf"]["kappa"].as<double>(0.0);
 
             YAML::Node sp = YAML::LoadFile(share + "/sensor_params.yaml")["UWB_sensor"];
             for (int i = 0; i < 3; ++i) {
@@ -252,14 +160,17 @@ private:
             RCLCPP_WARN(get_logger(), "Failed to load pose filter params: %s, using defaults", e.what());
         }
 
-        RCLCPP_INFO(get_logger(), "Q=diag(%.5f,%.5f,%.5f) alpha=%.1e beta=%.1f kappa=%.1f",
-                    Q_(0, 0), Q_(1, 1), Q_(2, 2), alpha_, beta_, kappa_);
+        RCLCPP_INFO(get_logger(), "Q=diag(%.5f,%.5f,%.5f) P0_scale=%.2f imu_theta_std=%.4f",
+                    Q_(0, 0), Q_(1, 1), Q_(2, 2), p0_scale_, imu_orientation_noise_std_);
     }
 
     void imu_callback(const sensor_msgs::msg::Imu::SharedPtr msg) {
         last_omega_ = msg->angular_velocity.z;
-        last_R_omega_ = msg->angular_velocity_covariance[8];
+        last_R_omega_ = msg->angular_velocity_covariance[8];  // real, plugin-populated (see plan notes)
 
+        // orientation_covariance is never populated by gazebo_ros_imu_sensor (TODO in
+        // its source) - the field is near ground-truth, so inject synthetic noise
+        // before using it as a correction, keeping theta estimation non-trivial.
         double siny_cosp = 2.0 * (msg->orientation.w * msg->orientation.z +
                                    msg->orientation.x * msg->orientation.y);
         double cosy_cosp = 1.0 - 2.0 * (msg->orientation.y * msg->orientation.y +
@@ -301,16 +212,19 @@ private:
         if (!have_anchor_ || !have_robot_dist_) return;
 
         Input u{last_v_, last_omega_};
-        MatrixXd Q_eff = Q_;
+
+        // Input noise (measured omega) propagates into theta process noise: an error
+        // of variance R_omega in the rate integrates to variance R_omega*dt^2 in theta.
+        Eigen::Matrix3d Q_eff = Q_;
         Q_eff(2, 2) += last_R_omega_ * dt_ * dt_;
 
-        auto [x_pred, P_pred] = ukf_->predict(x_, P_, u, dt_, Q_eff);
+        auto [x_pred, P_pred] = ekf_.predict(x_, P_, u, Q_eff, dt_);
 
-        VectorXd z(6);
+        Eigen::VectorXd z(6);
         z << z_anchor_[0], z_anchor_[1], z_anchor_[2], z_neighbor_[0], z_neighbor_[1],
              have_imu_ ? last_theta_imu_ : x_pred(2);
 
-        MatrixXd R = MatrixXd::Zero(6, 6);
+        Eigen::MatrixXd R = Eigen::MatrixXd::Zero(6, 6);
         for (int k = 0; k < 3; ++k) R(k, k) = sensor_anchor_std_[k] * sensor_anchor_std_[k];
         for (int k = 0; k < 2; ++k) {
             double s = sensor_robot_std_[neighbor_ids_[k]];
@@ -318,7 +232,7 @@ private:
         }
         R(5, 5) = imu_orientation_noise_std_ * imu_orientation_noise_std_;
 
-        auto [x_upd, P_upd, z_pred, innovation] = ukf_->update(x_pred, P_pred, z, R, anchor_positions_, neighbor_pos_);
+        auto [x_upd, P_upd, z_pred, innovation] = ekf_.update(x_pred, P_pred, z, R, anchor_positions_, neighbor_pos_);
         x_ = x_upd;
         P_ = P_upd;
 
@@ -345,8 +259,9 @@ private:
         pose_pub_->publish(msg);
     }
 
-    void publish_debug(const VectorXd& z, const VectorXd& z_pred, const VectorXd& innovation,
-                        const MatrixXd& Q_eff, const MatrixXd& R) {
+    void publish_debug(const Eigen::VectorXd& z, const Eigen::VectorXd& z_pred,
+                        const Eigen::VectorXd& innovation, const Eigen::Matrix3d& Q_eff,
+                        const Eigen::MatrixXd& R) {
         auto msg = int_sys_fp::msg::PoseEstimateDebug();
         msg.header.stamp = get_clock()->now();
         msg.header.frame_id = "world";
@@ -380,17 +295,16 @@ private:
     std::array<int, 2> neighbor_ids_;
 
     double node_freq_, dt_;
-    MatrixXd Q_;
+    Eigen::Matrix3d Q_;
     double p0_scale_;
     double imu_orientation_noise_std_;
-    double alpha_, beta_, kappa_;
     std::array<Eigen::Vector2d, 3> anchor_positions_;
     std::array<double, 3> sensor_anchor_std_;
     std::array<double, 3> sensor_robot_std_;
 
-    VectorXd x_;
-    MatrixXd P_;
-    std::unique_ptr<UnscentedKalmanFilter> ukf_;
+    State x_;
+    Eigen::Matrix3d P_;
+    PoseEKF ekf_;
 
     double last_v_ = 0.0;
     double last_omega_ = 0.0;
@@ -419,10 +333,10 @@ private:
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
     try {
-        auto node = std::make_shared<PoseUKFNode>();
+        auto node = std::make_shared<PoseEKFNode>();
         rclcpp::spin(node);
     } catch (const std::exception& e) {
-        RCLCPP_FATAL(rclcpp::get_logger("pose_ukf_node"), "Fatal error: %s", e.what());
+        RCLCPP_FATAL(rclcpp::get_logger("pose_ekf_node"), "Fatal error: %s", e.what());
     }
     rclcpp::shutdown();
     return 0;

@@ -11,6 +11,7 @@ find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(Eigen3 REQUIRED)
@@ -23,13 +24,17 @@ pkg_check_modules(YAML_CPP REQUIRED yaml-cpp)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "custom_messages/RobotDist.msg"
   "custom_messages/AnchorDist.msg"
+  "custom_messages/FsmState.msg"
+  "custom_messages/PoseEstimateDebug.msg"
   DEPENDENCIES std_msgs geometry_msgs
 )
 
 # Add executable
 add_executable(uwb_emulator src/UWB_utils_emulator.cpp)
 add_executable(regulator_node src/Regulator_node.cpp)
-add_executable(distance_kf_node src/UKF.cpp)
+add_executable(distance_kf_node src/KF.cpp)
+add_executable(pose_ukf_node src/UKF.cpp)
+add_executable(pose_ekf_node src/PoseEKF_node.cpp)
 
 # --- CONFIGURAZIONE DEGLI HEADER E DELLE DIPENDENZE ---
 # Imposta la cartella 'include' per i nodi sorgente (CORREZIONE per percorsi relativi)
@@ -52,6 +57,18 @@ target_include_directories(distance_kf_node PUBLIC
   ${EIGEN3_INCLUDE_DIRS}
 )
 
+target_include_directories(pose_ukf_node PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  ${EIGEN3_INCLUDE_DIRS}
+)
+
+target_include_directories(pose_ekf_node PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  ${EIGEN3_INCLUDE_DIRS}
+)
+
 # Link dependencies (ROS 2 dependencies)
 ament_target_dependencies(uwb_emulator
   rclcpp
@@ -65,7 +82,6 @@ ament_target_dependencies(regulator_node
   rclcpp
   std_msgs
   geometry_msgs
-  nav_msgs
   ament_index_cpp
 )
 
@@ -76,11 +92,29 @@ ament_target_dependencies(distance_kf_node
   ament_index_cpp
 )
 
+ament_target_dependencies(pose_ukf_node
+  rclcpp
+  std_msgs
+  geometry_msgs
+  sensor_msgs
+  ament_index_cpp
+)
+
+ament_target_dependencies(pose_ekf_node
+  rclcpp
+  std_msgs
+  geometry_msgs
+  sensor_msgs
+  ament_index_cpp
+)
+
 # Link with generated messages
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
 target_link_libraries(uwb_emulator ${cpp_typesupport_target})
 target_link_libraries(regulator_node ${cpp_typesupport_target})
 target_link_libraries(distance_kf_node ${cpp_typesupport_target})
+target_link_libraries(pose_ukf_node ${cpp_typesupport_target})
+target_link_libraries(pose_ekf_node ${cpp_typesupport_target})
 
 # Link with external libraries (YAML and Eigen)
 target_link_libraries(uwb_emulator
@@ -97,6 +131,14 @@ target_link_libraries(distance_kf_node
   ${YAML_CPP_LIBRARIES}
   Eigen3::Eigen
 )
+target_link_libraries(pose_ukf_node
+  ${YAML_CPP_LIBRARIES}
+  Eigen3::Eigen
+)
+target_link_libraries(pose_ekf_node
+  ${YAML_CPP_LIBRARIES}
+  Eigen3::Eigen
+)
 # -----------------------------------------------------
 
 
@@ -105,6 +147,8 @@ install(TARGETS
   uwb_emulator
   regulator_node
   distance_kf_node
+  pose_ukf_node
+  pose_ekf_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -132,6 +176,7 @@ install(FILES
   sensor_params_uniform.yaml
   UKF_params.yaml
   controller.yaml
+  pose_filter_params.yaml
   DESTINATION share/${PROJECT_NAME}/
 )
 

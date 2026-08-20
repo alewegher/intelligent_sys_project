@@ -18,3 +18,4 @@ controller_params:
       max_omega_r : [2.84, 2.84, 0.0] # maximum angular velocity for a turtlebot3 [rad/s]
     integral_limits:
       max_integral : [2.0, 2.0, 0.0]  # maximum integral accumulation [m*s]
+    phase_transition_ramp_s: 1.5  # gain-blending window for FORMATION->TRACKING switch [s]

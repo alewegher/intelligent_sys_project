@@ -5,7 +5,7 @@ import datetime
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction, SetEnvironmentVariable, ExecuteProcess
-from launch.substitutions import LaunchConfiguration, EnvironmentVariable
+from launch.substitutions import LaunchConfiguration, NotSubstitution
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from ament_index_python.packages import get_package_share_directory
@@ -40,8 +40,7 @@ def generate_launch_description():
         '/uwb/filtered_anchor_distances',
         '/uwb/robot_distances',
         '/desired_trajectory',
-        '/kf_filtered_robot_pose',
-        '/clock'
+        '/kf_filtered_robot_pose'
     ]
     
     # Crea la directory 'bags' se non esiste (necessario per ros2 bag record)
@@ -89,13 +88,14 @@ def generate_launch_description():
         description='Enable trajectory planner node (circular trajectory)'
     )
     
+    use_cpp_kf_arg = DeclareLaunchArgument(
+        'use_cpp_kf',
+        default_value='true',
+        description='Use C++ Kalman Filter implementation instead of Python (for better performance)'
+    )
 
     # Ensure TurtleBot3 model env var is set for gazebo/model resolution
     set_tb3_model = SetEnvironmentVariable('TURTLEBOT3_MODEL', 'burger')
-    set_gazebo_plugin_path = SetEnvironmentVariable(
-        'GAZEBO_PLUGIN_PATH',
-        [EnvironmentVariable('GAZEBO_PLUGIN_PATH', default_value=''), ':', '/opt/ros/humble/lib']
-    )
 
     # Include Gazebo without any robot pre-spawned
     gazebo_ros_share = get_package_share_directory('gazebo_ros')
@@ -106,9 +106,15 @@ def generate_launch_description():
     
     gazebo_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(gazebo_ros_share, 'launch', 'gazebo.launch.py')
+            os.path.join(gazebo_ros_share, 'launch', 'gzserver.launch.py')
         ),
         launch_arguments={'world': world_file, 'verbose': 'false'}.items()
+    )
+    
+    gzclient_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(gazebo_ros_share, 'launch', 'gzclient.launch.py')
+        )
     )
 
     # Delay spawning of robots so Gazebo has time to start and the spawn service is ready
@@ -177,6 +183,17 @@ def generate_launch_description():
         emulate_tty=True
     )
 
+    # Kalman Filter Python node (installed via CMake install(PROGRAMS ...))
+    kf_python_node = Node(
+        package='int_sys_fp',
+        executable='KF.py',  # script installed into lib/int_sys_fp/KF.py
+        name='distance_kf_node',
+        parameters=[{'use_sim_time': True}],
+        output='screen',
+        emulate_tty=True,
+        condition=IfCondition(NotSubstitution(LaunchConfiguration('use_cpp_kf')))
+    )
+    
     # Kalman Filter C++ node (compiled executable for better performance)
     kf_cpp_node = Node(
         package='int_sys_fp',
@@ -184,7 +201,8 @@ def generate_launch_description():
         name='distance_kf_node',
         parameters=[{'use_sim_time': True}],
         output='screen',
-        emulate_tty=True
+        emulate_tty=True,
+        condition=IfCondition(LaunchConfiguration('use_cpp_kf'))
     )
     
     # Trajectory Planner Node (optional) - Circular trajectory around origin
@@ -213,23 +231,25 @@ def generate_launch_description():
         uwb_frequency_arg,
         noise_type_arg,
         enable_planner_arg,
+        use_cpp_kf_arg,
         set_tb3_model,
-        set_gazebo_plugin_path,
         
         # 1. Crea la directory
         create_bags_dir,
         # 2. Avvia il resto della simulazione
         gazebo_launch,
+        gzclient_launch,
         spawn_tb3_1,
         spawn_tb3_2,
         spawn_tb3_3,
         uwb_emulator_node,
         controller_node,
+        kf_python_node,
         kf_cpp_node,
         planner_node,
         
         # 4. Avvia la registrazione con un ritardo
-        #delayed_bag_record_process
+        delayed_bag_record_process
     ])
 
     return ld

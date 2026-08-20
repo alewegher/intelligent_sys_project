@@ -58,9 +58,9 @@ class UWBNodeClass : public rclcpp::Node{
             }
             // Create publishers for UWB distance data usando i messaggi custom
             anchor_distances_pub_ = this->create_publisher<int_sys_fp::msg::AnchorDist>(
-                "uwb/anchor_distances", 10);
+                "/uwb/anchor_distances", 10);
             robot_distances_pub_ = this->create_publisher<int_sys_fp::msg::RobotDist>(
-                "uwb/robot_distances", 10);
+                "/uwb/robot_distances", 10);
             
             // ROS parameter for sensor frequency will be declared after parsing YAML
         }
@@ -398,9 +398,9 @@ class UWBNodeClass : public rclcpp::Node{
                 {
                     double original_distance = distances[robot_id];
                     distances[robot_id] = -1.0; // Indicate out of range with -1.0
-                    RCLCPP_WARN(this->get_logger(), "Robot %d to Anchor %d: distance %.2f m out of range [%.1f, %.1f] m - saturated to -1.0", 
-                               robot_id, anchor_id, original_distance, 
-                               anchor_sensor_ranges_[anchor_id][0], anchor_sensor_ranges_[anchor_id][1]);
+                    // RCLCPP_WARN(this->get_logger(), "Robot %d to Anchor %d: distance %.2f m out of range [%.1f, %.1f] m - saturated to -1.0", 
+                    //            robot_id, anchor_id, original_distance, 
+                    //            anchor_sensor_ranges_[anchor_id][0], anchor_sensor_ranges_[anchor_id][1]);
                 }
             }
         }
@@ -413,9 +413,9 @@ class UWBNodeClass : public rclcpp::Node{
                 {
                     double original_distance = distances[dist_idx];
                     distances[dist_idx] = -1.0; // Indicate out of range with -1.0
-                    RCLCPP_WARN(this->get_logger(), "Robot %d inter-robot distance %.2f m out of range [%.1f, %.1f] m - saturated to -1.0", 
-                               robot_id, original_distance, 
-                               robot_sensor_ranges_[robot_id][0], robot_sensor_ranges_[robot_id][1]);
+                    // RCLCPP_WARN(this->get_logger(), "Robot %d inter-robot distance %.2f m out of range [%.1f, %.1f] m - saturated to -1.0", 
+                    //            robot_id, original_distance, 
+                    //            robot_sensor_ranges_[robot_id][0], robot_sensor_ranges_[robot_id][1]);
                 }
             }
         }

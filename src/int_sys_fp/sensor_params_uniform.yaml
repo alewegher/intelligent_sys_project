@@ -1,6 +1,6 @@
 UWB_sensor:
   anchor 1:
-    position: [0.0, 0.0, 0.0]
+    position: [-10.0, 0.0, 0.0]
     orientation: [0.0, 0.0, 0.0]
     max range : 150 # m
     min range : 0.1 # m
