@@ -37,6 +37,14 @@ arrivo asincrono delle pose dei vicini fanno sì che due run identiche diano dat
 
 - Ogni configurazione va eseguita **almeno 3 volte** e ogni metrica riportata come
   **media ± deviazione standard su N run**.
+- Tutte le run hanno la **stessa durata in tempo simulato** (`sim_duration`, default un giro
+  di traiettoria), quindi contengono la stessa quantità di dati e le metriche sono
+  confrontabili senza rinormalizzare sulla lunghezza. Verificare comunque con
+  `ros2 bag info` che la durata registrata corrisponda a quella richiesta.
+- Attenzione: la registrazione parte a 16 s ma i robot devono ancora convergere a TRACKING,
+  quindi **la finestra a regime è più corta di un giro**. Definire la finestra sul primo
+  istante in cui tutti e tre i `fsm_state.phase` valgono 1, e verificare che sia abbastanza
+  lunga per l'analisi in frequenza prima di interpretarne i risultati.
 - Prima di dichiarare che una configurazione è migliore di un'altra, confronta la
   **dispersione entro configurazione** con la **differenza tra configurazioni**. Se sono
   dello stesso ordine, la differenza non è dimostrata: servono più ripetizioni.

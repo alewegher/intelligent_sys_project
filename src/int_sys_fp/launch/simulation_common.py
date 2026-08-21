@@ -12,16 +12,30 @@ import os
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription, TimerAction,
-                            SetEnvironmentVariable, OpaqueFunction)
+                            SetEnvironmentVariable, OpaqueFunction, RegisterEventHandler,
+                            EmitEvent)
+from launch.event_handlers import OnProcessExit
+from launch.events import Shutdown
 from launch.substitutions import LaunchConfiguration, EnvironmentVariable, PythonExpression
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from ament_index_python.packages import get_package_share_directory
 
 
-def declare_common_args():
-    """Launch arguments shared by both entry points."""
+def declare_common_args(default_sim_duration='0.0'):
+    """Launch arguments shared by both entry points.
+
+    default_sim_duration lets the bag entry point default to a bounded run while the demo
+    entry point keeps running until Ctrl-C.
+    """
     return [
+        DeclareLaunchArgument(
+            'sim_duration', default_value=default_sim_duration,
+            description='Length of the run in SECONDS OF SIMULATION TIME, counted from the '
+                        'moment recording starts. 0 = run until Ctrl-C. Measured on /clock '
+                        'rather than the wall clock, so runs stay comparable even if '
+                        'Gazebo\'s real-time factor varies. One trajectory lap takes '
+                        '2*pi/angular_velocity seconds (125.7 s at the default 0.05 rad/s).'),
         DeclareLaunchArgument(
             'uwb_frequency', default_value='50.0',
             description='UWB sensor frequency in Hz'),
@@ -268,7 +282,41 @@ def build_simulation_actions():
         *pose_ukf_nodes,
         legacy_kf_cpp_node,
         planner_node,
-        plotjuggler_node,
+        #plotjuggler_node,
+        *_run_timer_actions(),
+    ]
+
+
+# Recording (and the run-length budget) start after the last robot spawn at t=13 s.
+RECORD_START_DELAY = 16.0
+
+
+def _run_timer_actions():
+    """Bounded-run support: stop everything after sim_duration seconds of SIM time.
+
+    Started on the same delay as the bag recorder, so the budget measures RECORDED time
+    rather than including the ~16 s of Gazebo startup and robot spawning.
+
+    When run_timer exits, its exit event is turned into a launch Shutdown, which SIGINTs
+    every process including `ros2 bag record` - that is what lets rosbag2 close and index
+    the bag properly instead of leaving it truncated.
+    """
+    run_timer_node = Node(
+        package='int_sys_fp', executable='run_timer.py', name='run_timer',
+        parameters=[{
+            'use_sim_time': True,
+            'duration': ParameterValue(LaunchConfiguration('sim_duration'), value_type=float),
+        }],
+        output='screen', emulate_tty=True,
+        # PythonExpression rather than IfCondition on the raw value: '0.0' is a truthy
+        # non-empty string, so a plain IfCondition would arm the timer even when disabled.
+        condition=IfCondition(PythonExpression([LaunchConfiguration('sim_duration'), ' > 0'])))
+
+    return [
+        TimerAction(period=RECORD_START_DELAY, actions=[run_timer_node]),
+        RegisterEventHandler(OnProcessExit(
+            target_action=run_timer_node,
+            on_exit=[EmitEvent(event=Shutdown(reason='sim_duration reached'))])),
     ]
 
 

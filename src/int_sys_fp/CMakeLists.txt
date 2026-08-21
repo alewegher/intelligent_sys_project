@@ -156,6 +156,7 @@ install(TARGETS
 install(PROGRAMS
   src/KF.py
   src/trajectory_planner.py
+  src/run_timer.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -17,8 +17,23 @@ ros2 launch int_sys_fp synchronized_system_with_bag.launch.py
 ```
 
 La registrazione parte **16 s dopo il launch** (dopo lo spawn dell'ultimo robot a 13 s) e
-cattura 33 topic. Non c'è timeout: la simulazione gira fino a Ctrl-C. Un giro completo della
-traiettoria dura ≈125.7 s, quindi per avere almeno due giri a regime servono ~5 minuti.
+cattura 45 topic (33 sempre + 12 solo in `gain_mode:=sdre_ci_experimental`).
+
+**Le run con bag hanno durata fissa**: si fermano da sole dopo `sim_duration` secondi di
+**tempo simulato** (default `125.664`, cioè un giro esatto di traiettoria), poi il bag viene
+chiuso e indicizzato e tutti i processi terminano. Non serve Ctrl-C e non restano processi
+appesi.
+
+> **Perché tempo simulato e non reale**: un timer wall-clock darebbe run di lunghezza
+> *simulata* diversa ogni volta che il real-time factor di Gazebo varia (carico CPU,
+> configurazione più pesante), che è esattamente l'incoerenza da evitare. Poiché tutta
+> l'analisi lavora su `header.stamp`, cioè in tempo simulato, anche la durata dev'essere
+> definita lì. Il conteggio lo fa il nodo `run_timer`, il cui timer gira sul clock del nodo
+> con `use_sim_time:=True`, quindi ticchetta su `/clock`. L'overshoot è al massimo il
+> periodo di polling, 0.5 s.
+
+Il launch di demo (`synchronized_system.launch.py`) mantiene invece `sim_duration:=0`, cioè
+gira fino a Ctrl-C.
 
 ---
 
@@ -48,6 +63,7 @@ traiettoria dura ≈125.7 s, quindi per avere almeno due giri a regime servono ~
 | `distance_process_noise` | double | `0.01` | Rumore di processo del KF scalare — **vedi §5.3** |
 | `radius` | double | `3.0` | Raggio della traiettoria circolare |
 | `angular_velocity` | double | `0.05` | Velocità angolare del riferimento |
+| `sim_duration` | double | `125.664` (bag) / `0` (demo) | Durata della run in **secondi di tempo simulato**, contati da quando parte la registrazione. `0` = fino a Ctrl-C. Allo scadere il bag viene chiuso e tutto termina |
 
 Esempio:
 ```bash
@@ -119,8 +135,15 @@ realizzazioni.**
      che l'errore standard della media scende sotto la differenza che vuoi dichiarare.
 4. Riporta sempre media ± deviazione standard su N run, **mai il valore di una singola run**.
 
-Con ~5 minuti per run (due giri completi di traiettoria), 3 ripetizioni costano ~15 minuti
-per configurazione.
+Con `sim_duration:=125.664` (un giro) le run durano ~2.5 minuti reali a RTF≈1, quindi 3
+ripetizioni costano ~8 minuti per configurazione. Poiché la durata è fissata in tempo
+simulato, **tutte le run producono la stessa quantità di dati** e le metriche sono
+confrontabili senza rinormalizzare.
+
+⚠️ **Il transitorio si mangia parte del giro.** La registrazione parte a 16 s ma i robot
+devono ancora convergere da FORMATION a TRACKING, quindi la finestra a regime è **più corta
+di un giro completo**. Se in analisi serve un giro intero già a regime, usare
+`sim_duration:=180`. Se si cambia `angular_velocity`, un giro diventa `2π/ω` secondi.
 
 ### 3.3 Un bag da solo non dice quale configurazione l'ha prodotto
 
@@ -304,3 +327,5 @@ con la baseline si misura l'effetto combinato di KF scalare **e** MAD.
 | `ModuleNotFoundError: lxml` allo spawn dei robot | Il terminale ha un virtualenv Python attivo che nasconde i pacchetti di sistema. Vedi `.vscode/settings.json` → `python.terminal.activateEnvironment: false` |
 | L'errore di tracking non converge mai | Velocità tangenziale del riferimento oltre 0.22 m/s — vedi §7 |
 | EKF e UKF danno risultati identici | `ukf.alpha` troppo piccolo — vedi §4 |
+| La run non si ferma mai | `sim_duration:=0` (default del launch di demo). Passare un valore > 0 |
+| Il bag è più corto del previsto | Il `run_timer` conta da quando parte la registrazione (16 s), non dal launch. Verificare con `ros2 bag info` |

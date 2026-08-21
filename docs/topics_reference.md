@@ -420,7 +420,12 @@ workspace **non è referenziato da nessun launch file**. Registrato
 ## 5. Cosa finisce nel bag
 
 `BAG_TOPICS` è definito in `launch/simulation_common.py` (**45 topic**, di cui 12 solo in `gain_mode:=sdre_ci_experimental`). La
-registrazione parte **16 s dopo il launch** (`synchronized_system_with_bag.launch.py:43`),
+run si ferma da sola dopo `sim_duration` secondi di **tempo simulato** (default `125.664`
+= un giro di traiettoria): il nodo `run_timer` conta su `/clock` ed esce, il launch
+trasforma la sua uscita in uno `Shutdown` che manda SIGINT a `ros2 bag record`, così
+rosbag2 chiude e indicizza il bag correttamente invece di lasciarlo troncato.
+`sim_duration:=0` disattiva il limite. La
+registrazione parte **16 s dopo il launch**,
 cioè dopo lo spawn del terzo robot a 13 s, con `--use-sim-time`. Output in
 `~/ros2_ws/bags/int_sys_sim_<YYYY_MM_DD-HH_MM_SS>/`. Il launch file
 `synchronized_system.launch.py` **non registra nulla**.
