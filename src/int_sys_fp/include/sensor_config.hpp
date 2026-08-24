@@ -19,7 +19,7 @@ namespace sensor_config {
 
 /// Sensor YAML file name (leading '/') for a given noise_type: 1=Gaussian, 2=Uniform.
 inline std::string sensorYamlName(int noise_type) {
-    return (noise_type == 2) ? "/sensor_params_uniform.yaml" : "/sensor_params.yaml";
+    return (noise_type == 2) ? "/config/sensor_params_uniform.yaml" : "/config/sensor_params.yaml";
 }
 
 /**

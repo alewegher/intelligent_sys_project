@@ -362,7 +362,7 @@ private:
         try {
             std::string share = ament_index_cpp::get_package_share_directory("int_sys_fp");
 
-            YAML::Node pf = YAML::LoadFile(share + "/pose_filter_params.yaml")["pose_filter"];
+            YAML::Node pf = YAML::LoadFile(share + "/config/pose_filter_params.yaml")["pose_filter"];
             Q_(0, 0) = pf["Q"]["x_var"].as<double>(0.001);
             Q_(1, 1) = pf["Q"]["y_var"].as<double>(0.001);
             Q_(2, 2) = pf["Q"]["theta_var"].as<double>(0.001);
@@ -405,7 +405,7 @@ private:
         std::string gm_yaml = "one_step_riccati";
         try {
             std::string share = ament_index_cpp::get_package_share_directory("int_sys_fp");
-            YAML::Node pf = YAML::LoadFile(share + "/pose_filter_params.yaml")["pose_filter"];
+            YAML::Node pf = YAML::LoadFile(share + "/config/pose_filter_params.yaml")["pose_filter"];
             if (pf["gain_mode"]) gm_yaml = pf["gain_mode"].as<std::string>("one_step_riccati");
         } catch (const std::exception&) { /* keep the default */ }
 

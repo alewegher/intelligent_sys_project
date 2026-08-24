@@ -136,7 +136,7 @@ class ControllerClass : public rclcpp::Node{
 
             try {
                 std::string package_share = ament_index_cpp::get_package_share_directory("int_sys_fp");
-                std::string yaml_path = package_share + "/controller.yaml";
+                std::string yaml_path = package_share + "/config/controller.yaml";
                 YAML::Node config = YAML::LoadFile(yaml_path);
 
                 auto ctrl_params = config["controller_params"];

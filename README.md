@@ -49,14 +49,14 @@ There is no node that loops over all 3 robots: `regulator_node` and `pose_ekf_no
 
 ### `uwb_emulator` (C++)
 - **Publishes:** `/uwb/anchor_distances`, `/uwb/robot_distances` — `int_sys_fp/msg/AnchorDist`, `int_sys_fp/msg/RobotDist` (raw, noisy).
-- **Config:** `sensor_params.yaml` (or `sensor_params_uniform.yaml`), launch arg `noise_type` (1=Gaussian, 2=Uniform), param `uwb_sensor_frequency`.
+- **Config:** `config/sensor_params.yaml` (or `config/sensor_params_uniform.yaml`), launch arg `noise_type` (1=Gaussian, 2=Uniform), param `uwb_sensor_frequency`.
 
 ### `pose_ekf_node` / `pose_ukf_node` (C++, one instance per robot via `robot_id` param)
 - **Subscribes:** `{prefix}/cmd_vel`, `{prefix}/imu`, `/uwb/anchor_distances`, `/uwb/robot_distances` (own row selected via `robot_id`), and the two neighbors' `{neighbor_prefix}/pose_estimate`.
 - **Publishes:**
   - `{prefix}/pose_estimate` — `geometry_msgs/msg/PoseWithCovarianceStamped`: x, y, θ (as quaternion z/w), partial 6×6 covariance (only the x/y/θ block is filled). Consumed by `regulator_node`.
   - `{prefix}/pose_debug` — `int_sys_fp/msg/PoseEstimateDebug`: `robot_id`, `x`, `y`, `theta` (plain doubles), `p[9]` (full 3×3 covariance, row-major), `z[6]`/`z_pred[6]`/`innovation[6]` (layout: anchor0, anchor1, anchor2, neighbor0, neighbor1, theta_imu), `q_diag[3]`, `r_diag[6]`, `have_imu`, `v_cmd`, `omega_imu`, `dt`. This is the topic to record in a bag for offline/MATLAB analysis — every field is named, no index-guessing.
-- **Config:** `pose_filter_params.yaml` (Q, initial covariance scale, UKF sigma-point params, synthetic IMU orientation noise std, gain mode), `sensor_params.yaml` (anchor positions + R for anchors/neighbors).
+- **Config:** `config/pose_filter_params.yaml` (Q, initial covariance scale, UKF sigma-point params, synthetic IMU orientation noise std, gain mode), `config/sensor_params.yaml` (anchor positions + R for anchors/neighbors).
 - **Note on θ and the IMU:** the Gazebo `gazebo_ros_imu_sensor` plugin never populates `orientation_covariance` (unimplemented in the plugin, verified from its source — the field is always zero regardless of SDF config), so synthetic noise is added in software (`imu_orientation_noise_std`) before using orientation as a correction; `angular_velocity_covariance` *is* populated from the real configured sensor noise and is used directly as `R_ω`.
 
 ### `regulator_node` (C++, one instance per robot via `robot_id` param)
@@ -66,27 +66,30 @@ There is no node that loops over all 3 robots: `regulator_node` and `pose_ekf_no
   - `{prefix}/fsm_state` — `int_sys_fp/msg/FsmState`: `phase` (0=FORMATION, 1=TRACKING), `formation_error`.
   - `{prefix}/tracking_error`, `{prefix}/desired_trajectory_array`, `{prefix}/centroid_position` — `std_msgs/msg/Float64MultiArray` (debug/PlotJuggler).
 - **Control pipeline:** formation error from estimated positions → local debounce + neighbor AND-consensus → gain-blended ramp (formation-stiff-PD ↔ tracking-PID+soft-formation) over `phase_transition_ramp_s` → 2D velocity → differential-drive conversion (heading PD, speed reduction in turns, saturation + anti-windup).
-- **Config:** `controller.yaml`.
+- **Config:** `config/controller.yaml`.
 
 ### `distance_kf_node` (C++ `KF.cpp` / Python `KF.py`, legacy baseline, single instance)
 - Filters the 15 raw UWB distances directly (scalar KF per distance, no pose/dynamics model, MAD-based outlier rejection). Not consumed by `regulator_node` or the pose filters — launched only with `enable_legacy_kf:=true`, for report/comparison purposes.
 - **Subscribes:** `/uwb/anchor_distances`, `/uwb/robot_distances`. **Publishes:** `/uwb/filtered_anchor_distances`, `/uwb/filtered_robot_distances`.
-- **Config:** `UKF_params.yaml`.
+- **Config:** `config/UKF_params.yaml`.
 
 ### `trajectory_planner` (Python)
 - **Publishes:** `/desired_trajectory` — `geometry_msgs/msg/Pose` (circular reference path, shared centroid target).
 
 ## Configuration files
 
-All installed to `install/int_sys_fp/share/int_sys_fp/` and loaded at runtime (no rebuild needed to change values).
+Source of truth: `src/int_sys_fp/config/*.yaml`, installed to
+`install/int_sys_fp/share/int_sys_fp/config/` as individual file symlinks (via
+`colcon build --symlink-install`), so edits are picked up at the next run with no
+rebuild.
 
 | File | Used by | Contents |
 |---|---|---|
-| `sensor_params.yaml` | `uwb_emulator`, `pose_ekf_node`, `pose_ukf_node`, legacy `distance_kf_node` | Anchor positions, per-anchor/per-robot UWB noise (Gaussian, stddev) |
-| `sensor_params_uniform.yaml` | (alternative to above) | Same structure, Uniform noise |
-| `pose_filter_params.yaml` | `pose_ekf_node`, `pose_ukf_node` | Process noise `Q` (x/y/theta variance), `P0` inflation scale, UKF sigma-point params (α, β, κ), synthetic IMU orientation noise std, `gain_mode` |
-| `UKF_params.yaml` | legacy `distance_kf_node` only | Process noise, outlier detection (MAD threshold, window) for the 15-scalar legacy filter |
-| `controller.yaml` | `regulator_node` | Control frequency, PID gains (Kp/Kv/Ki), integral limits, velocity limits, `phase_transition_ramp_s` (FSM gain-blending window) |
+| `config/sensor_params.yaml` | `uwb_emulator`, `pose_ekf_node`, `pose_ukf_node`, legacy `distance_kf_node` | Anchor positions, per-anchor/per-robot UWB noise (Gaussian, stddev) |
+| `config/sensor_params_uniform.yaml` | (alternative to above) | Same structure, Uniform noise |
+| `config/pose_filter_params.yaml` | `pose_ekf_node`, `pose_ukf_node` | Process noise `Q` (x/y/theta variance), `P0` inflation scale, UKF sigma-point params (α, β, κ), synthetic IMU orientation noise std, `gain_mode` |
+| `config/UKF_params.yaml` | legacy `distance_kf_node` only | Process noise, outlier detection (MAD threshold, window) for the 15-scalar legacy filter |
+| `config/controller.yaml` | `regulator_node` | Control frequency, PID gains (Kp/Kv/Ki), integral limits, velocity limits, `phase_transition_ramp_s` (FSM gain-blending window) |
 
 ## Launch
 
@@ -149,9 +152,9 @@ ros2 run rqt_graph rqt_graph
 - **Package not found / executables missing**: `colcon build --packages-select int_sys_fp && source install/setup.bash`.
 - **CMake cache mismatch**: `rm -rf build/int_sys_fp install/int_sys_fp log/latest_build && colcon build --packages-select int_sys_fp`.
 - **A `regulator_node`/`pose_ekf_node`/`pose_ukf_node` instance exits immediately with "robot_id parameter not set"**: these nodes require an explicit `robot_id` (0/1/2) parameter — this is intentional (forces distributed configuration), the provided launch file already sets it for each of the 3 instances.
-- **Robots drift apart during tracking**: increase `Kf` (formation gain during TRACKING) in `Regulator_node.cpp`, or shorten `phase_transition_ramp_s` in `controller.yaml`.
+- **Robots drift apart during tracking**: increase `Kf` (formation gain during TRACKING) in `Regulator_node.cpp`, or shorten `phase_transition_ramp_s` in `config/controller.yaml`.
 - **θ estimate drifts or stays near 0**: check `/imu` is actually publishing (`ros2 topic echo /imu --once`) — pose filters need it for θ correction, UWB distances alone cannot observe θ.
-- **Pose covariance never shrinks / diverges**: check `pose_filter_params.yaml`'s `Q` isn't too large relative to the measurement noise in `sensor_params.yaml`.
+- **Pose covariance never shrinks / diverges**: check `config/pose_filter_params.yaml`'s `Q` isn't too large relative to the measurement noise in `config/sensor_params.yaml`.
 - **PlotJuggler doesn't start / `plotjuggler: command not found`**: `sudo apt install ros-humble-plotjuggler ros-humble-plotjuggler-ros`, or launch with `enable_plotjuggler:=false` to skip it.
 - **Bag directory missing / permission error**: the bag-recording launch file creates `~/ros2_ws/bags/` automatically; if it still fails, check `~/ros2_ws` is writable, or set `enable_bag_record:=false`.
 
@@ -178,11 +181,11 @@ int_sys_fp/
 │   ├── FsmState.msg                    # phase + formation_error (FSM consensus broadcast)
 │   └── PoseEstimateDebug.msg           # full filter transparency channel (state, P, z, z_pred, innovation, Q, R)
 ├── CMakeLists.txt, package.xml
-└── *.yaml
-    ├── sensor_params.yaml / sensor_params_uniform.yaml
-    ├── pose_filter_params.yaml         # Q, P0, UKF params, IMU noise (editable without rebuild)
-    ├── UKF_params.yaml                 # legacy filter only
-    └── controller.yaml                 # PID gains, limits, phase_transition_ramp_s
+└── config/
+    ├── config/sensor_params.yaml / config/sensor_params_uniform.yaml
+    ├── config/pose_filter_params.yaml         # Q, P0, UKF params, IMU noise (editable without rebuild)
+    ├── config/UKF_params.yaml                 # legacy filter only
+    └── config/controller.yaml                 # PID gains, limits, phase_transition_ramp_s
 ```
 
 ## References

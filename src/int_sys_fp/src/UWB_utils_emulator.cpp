@@ -460,8 +460,8 @@ class UWBNodeClass : public rclcpp::Node{
 
         // YAML configuration choice - usando ament_index per trovare i file
         std::string package_share_directory = ament_index_cpp::get_package_share_directory("int_sys_fp");
-        std::string yaml_gauss = package_share_directory + "/sensor_params.yaml";
-        std::string yaml_uniform = package_share_directory + "/sensor_params_uniform.yaml";
+        std::string yaml_gauss = package_share_directory + "/config/sensor_params.yaml";
+        std::string yaml_uniform = package_share_directory + "/config/sensor_params_uniform.yaml";
         int NOISE_TYPE = 1; // Default to Gaussian noise
 };
 

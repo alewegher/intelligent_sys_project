@@ -171,14 +171,19 @@ install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}/
 )
 
-# Install config files
+# Install config files to share/${PROJECT_NAME}/config/, matching the source layout
+# (code reads them via get_package_share_directory(...) + "/config/<name>.yaml").
+# Deliberately install(FILES ...) and not install(DIRECTORY ...): colcon's
+# --symlink-install symlinks individual files listed here, but only copies files
+# reached through install(DIRECTORY ...) - using DIRECTORY would silently bring back
+# the "edit needs a rebuild" problem for every YAML in config/.
 install(FILES
-  sensor_params.yaml
-  sensor_params_uniform.yaml
-  UKF_params.yaml
-  controller.yaml
-  pose_filter_params.yaml
-  DESTINATION share/${PROJECT_NAME}/
+  config/sensor_params.yaml
+  config/sensor_params_uniform.yaml
+  config/UKF_params.yaml
+  config/controller.yaml
+  config/pose_filter_params.yaml
+  DESTINATION share/${PROJECT_NAME}/config/
 )
 
 if(BUILD_TESTING)

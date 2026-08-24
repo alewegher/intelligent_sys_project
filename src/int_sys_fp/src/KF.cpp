@@ -116,7 +116,7 @@ private:
     void parse_kf_parameters() {
         try {
             std::string package_share = ament_index_cpp::get_package_share_directory("int_sys_fp");
-            std::string yaml_path = package_share + "/sensor_params.yaml";
+            std::string yaml_path = package_share + "/config/sensor_params.yaml";
             
             YAML::Node config = YAML::LoadFile(yaml_path);
             auto uwb_sensor = config["UWB_sensor"];

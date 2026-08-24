@@ -31,7 +31,7 @@ Definita in `include/pose_dynamics.hpp:110-117`, spawn in `launch/simulation_com
 `uwb_sensor_emulator`, `controller_node_{0,1,2}`, `pose_ekf_node_{0,1,2}` oppure
 `pose_ukf_node_{0,1,2}`, `distance_kf_node`, `trajectory_planner`.
 
-**Posizioni degli anchor** (`sensor_params.yaml:3,13,23`), frame world:
+**Posizioni degli anchor** (`config/sensor_params.yaml:3,13,23`), frame world:
 anchor 1 = `(0, 0, 0)`, anchor 2 = `(10, 0, 0)`, anchor 3 = `(0, 10, 0)` metri.
 
 ---
@@ -96,7 +96,7 @@ Riempito in `Regulator_node.cpp:327-331`.
 - `header.frame_id` **non viene mai impostato** → stringa vuota.
 - `phase`: vale `1` solo quando `current_phase == TRACKING`. Attenzione: commuta solo
   quando la **rampa di blending è completata** (`Regulator_node.cpp:320-323`), cioè
-  `phase_transition_ramp_s` = 1.5 s (`controller.yaml:21`) **dopo** l'inizio della
+  `phase_transition_ramp_s` = 1.5 s (`config/controller.yaml:21`) **dopo** l'inizio della
   transizione.
 - `formation_error`: `sqrt(e01² + e02² + e12²)` con `eij = ‖p_i − p_j‖ − 1.5 m`
   (`Regulator_node.cpp:216-228`; distanza desiderata hardcoded a 1.5 m alla riga `:103`).
@@ -127,7 +127,7 @@ Scritto in modo identico da entrambi i filtri: `PoseEKF_node.cpp:262-291`, `UKF.
 
 > **MATLAB**: `P = reshape(p, 3, 3)'` — la trasposizione serve perché `reshape` è
 > column-major mentre questo array è row-major. Valore iniziale `P0 = 10·I`
-> (`pose_filter_params.yaml:12`).
+> (`config/pose_filter_params.yaml:12`).
 
 **`z[6]`, `z_pred[6]`, `innovation[6]` — layout dei 6 canali di misura**
 (`pose_dynamics.hpp:54-67`, assemblati in `PoseEKF_node.cpp:223-225`):
@@ -177,7 +177,7 @@ sull'id **del vicino**, non del proprietario); `r_diag[5] = 0.02² = 4e-4 rad²`
 |---|---|
 | **Publisher** | `uwb_sensor_emulator` — `UWB_utils_emulator.cpp:60-61`. Istanza globale unica, senza namespace |
 | **Subscriber** | `pose_ekf_node` (`PoseEKF_node.cpp:100-102`), `pose_ukf_node` (`UKF.cpp:189-191`), `distance_kf_node` (`KF.cpp:46-48`, spento di default) |
-| **Frequenza** | 50 Hz — timer da `sensor_params.yaml:7` (`anchor 1: frequency`), **non** dal launch arg |
+| **Frequenza** | 50 Hz — timer da `config/sensor_params.yaml:7` (`anchor 1: frequency`), **non** dal launch arg |
 | **Contenuto** | 3 array da 3 double, distanze euclidee robot→anchor in metri, calcolate nel frame world dalle posizioni `/odom`, poi rumorizzate e saturate |
 | **Registrato** | sì (`simulation_common.py:164`) |
 
@@ -270,7 +270,7 @@ compaiono (`ros2 bag record` tollera un topic elencato che non esiste mai).
 |---|---|
 | **Publisher** | `regulator_node` — `Regulator_node.cpp:40`, pubblicato a `:386` |
 | **Subscriber** | plugin Gazebo `libgazebo_ros_diff_drive.so`; `pose_ekf_node` (`:92-94`); `pose_ukf_node` (`UKF.cpp:181-183`) — **i filtri usano solo `linear.x`** come input `v` del modello di processo |
-| **Frequenza** | 50 Hz (`controller.yaml:2`). **Gated**: non pubblica nulla finché non ha visto tutti e tre gli stream `pose_estimate` (`Regulator_node.cpp:281-285`) |
+| **Frequenza** | 50 Hz (`config/controller.yaml:2`). **Gated**: non pubblica nulla finché non ha visto tutti e tre gli stream `pose_estimate` (`Regulator_node.cpp:281-285`) |
 
 **Contenuto — frame body** (`Regulator_node.cpp:371-384`):
 - `linear.x = desired_speed · max(0.5, cos(heading_error))` m/s. `desired_speed` saturata a
@@ -479,11 +479,11 @@ reale e permanente**, visibile in `innovation[0..2]`.
 **Q7 — il launch arg `uwb_frequency` è morto.** Viene passato come parametro ROS ma
 `UWB_utils_emulator.cpp:191-192` lo dichiara e **lo sovrascrive immediatamente** con il
 valore YAML; il periodo del timer viene da quel valore. **Cambiarlo da riga di comando non
-ha alcun effetto** — va modificato `sensor_params.yaml:7`.
+ha alcun effetto** — va modificato `config/sensor_params.yaml:7`.
 
 **Q8 — le posizioni degli anchor arrivano sempre dallo YAML gaussiano.** L'emulatore sceglie
-tra `sensor_params.yaml` e `sensor_params_uniform.yaml` secondo `noise_type`, ma **entrambi
-i filtri hardcodano `sensor_params.yaml`** (`PoseEKF_node.cpp:150`, `UKF.cpp:242`). L'anchor
+tra `config/sensor_params.yaml` e `config/sensor_params_uniform.yaml` secondo `noise_type`, ma **entrambi
+i filtri hardcodano `config/sensor_params.yaml`** (`PoseEKF_node.cpp:150`, `UKF.cpp:242`). L'anchor
 1 sta in `(0,0,0)` nel file gaussiano e in `(-10,0,0)` in quello uniforme. **Girare con
 `noise_type:=2` fornisce quindi al filtro una posizione dell'anchor 1 sbagliata di 10 m**:
 trattare ogni bag a rumore uniforme come non valido per l'analisi di accuratezza finché non
@@ -526,7 +526,7 @@ esattamente 2 elementi in ordine fisso `[x, y]`.
 
 **Q16 — il termine derivativo del PID sul centroide è permanentemente nullo.**
 `desired_velocity` è posto a zero in `Regulator_node.cpp:99` e mai più aggiornato, quindi
-`velocity_error = desired_velocity − 0`. Il guadagno `Kv_r1` di `controller.yaml:9` **non ha
+`velocity_error = desired_velocity − 0`. Il guadagno `Kv_r1` di `config/controller.yaml:9` **non ha
 alcun effetto**: il controllore è di fatto un PI più un PD separato sull'heading.
 
 **Q17 — il fattore di blending della FSM non è osservabile.** `phase_blend_` sale da 0 a 1

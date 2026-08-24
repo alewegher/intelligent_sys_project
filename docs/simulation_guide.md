@@ -44,7 +44,7 @@ gira fino a Ctrl-C.
 | Fattore | Valori | Default | Cosa cambia |
 |---|---|---|---|
 | `filter_type` | `ekf` \| `ukf` | `ekf` | Quale stimatore di posa gira sui 3 robot |
-| `noise_type` | `1` \| `2` | `1` | 1 = gaussiano, 2 = uniforme. Seleziona `sensor_params.yaml` o `sensor_params_uniform.yaml` per l'emulatore |
+| `noise_type` | `1` \| `2` | `1` | 1 = gaussiano, 2 = uniforme. Seleziona `config/sensor_params.yaml` o `config/sensor_params_uniform.yaml` per l'emulatore |
 | `enable_legacy_kf` | `true` \| `false` | `false` | Lancia `distance_kf_node` (KF scalare sulle distanze + MAD) |
 | `enable_planner` | `true` \| `false` | `true` | Se `false` nessuno pubblica `/desired_trajectory`: i robot formano il triangolo nell'origine e non tracciano nulla |
 | `enable_plotjuggler` | `true` \| `false` | `true` | Solo visualizzazione |
@@ -73,8 +73,8 @@ ros2 launch int_sys_fp synchronized_system_with_bag.launch.py \
 
 ### 2.2 Richiedono `colcon build`
 
-Gli YAML stanno nella **root del pacchetto** e vengono letti dal path installato in
-`share/`, quindi modificarli richiede una ricostruzione.
+Gli YAML stanno in `src/int_sys_fp/config/` e vengono letti dal path installato in
+`share/int_sys_fp/config/`, quindi modificarli richiede una ricostruzione.
 
 > **Fallo una volta e il problema sparisce**: `colcon build --symlink-install` fa sì che
 > `install(FILES ...)` crei symlink invece di copie, quindi da quel momento le modifiche
@@ -82,16 +82,16 @@ Gli YAML stanno nella **root del pacchetto** e vengono letti dal path installato
 
 | File | Parametro | Default | Effetto |
 |---|---|---|---|
-| `pose_filter_params.yaml` | `Q.{x_var,y_var,theta_var}` | `0.001` | Rumore di processo del filtro di posa |
+| `config/pose_filter_params.yaml` | `Q.{x_var,y_var,theta_var}` | `0.001` | Rumore di processo del filtro di posa |
 | | `initial_covariance.p0_scale` | `10.0` | `P0 = p0_scale · I` |
 | | `imu_orientation_noise_std` | `0.02` rad | σ del rumore sintetico su θ **e** `R(5,5)` |
 | | `ukf.alpha` | `1.0` | Spread dei sigma point — **vedi §4** |
 | | `ukf.beta` | `2.0` | Ottimale per distribuzioni gaussiane |
 | | `ukf.kappa` | `0.0` | Regola classica `κ = 3 − L`, con L=3 |
-| `sensor_params.yaml` | posizioni anchor, `min/max range` | vedi file | Geometria e saturazione |
+| `config/sensor_params.yaml` | posizioni anchor, `min/max range` | vedi file | Geometria e saturazione |
 | | `noise model.stddev` | `0.01` m | σ del rumore UWB — **il livello di rumore è un asse sperimentale a sé** |
 | | `anchor 1: frequency` | `50` | Rate dell'emulatore UWB (il launch arg `uwb_frequency` è **morto**) |
-| `controller.yaml` | `control_frequency` | `50.0` | Rate del loop di controllo |
+| `config/controller.yaml` | `control_frequency` | `50.0` | Rate del loop di controllo |
 | | `position_gains.Kp_r1` | `[10,10,0]` | Guadagno proporzionale — **solo `_r1` viene letto**, per tutti e tre i robot |
 | | `integral_gains.Ki_r1` | `[0.01,0.01,0]` | Guadagno integrale |
 | | `max_velocities.max_vel_r` | `[0.22,0.22,0]` | Saturazione di velocità |
@@ -239,8 +239,8 @@ ellissi 3σ gonfiate**: è comportamento corretto, non un bug.
 
 ### 5.6 `noise_type:=2` (uniforme): cosa è stato corretto
 
-Prima era inutilizzabile: `sensor_params_uniform.yaml` metteva l'anchor 1 in `(-10,0,0)`
-mentre i filtri leggevano sempre `sensor_params.yaml` dove sta in `(0,0,0)` — errore di
+Prima era inutilizzabile: `config/sensor_params_uniform.yaml` metteva l'anchor 1 in `(-10,0,0)`
+mentre i filtri leggevano sempre `config/sensor_params.yaml` dove sta in `(0,0,0)` — errore di
 modello di 10 m — e `R` restava tarata su `σ=0.01` contro un rumore uniforme `±0.1`.
 
 Ora: l'anchor 1 è allineato a `(0,0,0)`, il parametro `noise_type` viene passato anche ai
@@ -260,17 +260,17 @@ Cose che sembrano configurabili o significative ma non lo sono:
 
 | Elemento | Realtà |
 |---|---|
-| `UKF_params.yaml` | **Nessun nodo lo legge.** Il nome inganna: contiene parametri del KF legacy sulle distanze, e alcuni valori divergono da quelli realmente usati in `KF.cpp` (es. `distance_var: 0.001` contro `0.01` effettivo). Modificarlo non fa nulla |
-| `uwb_frequency` (launch arg) | Passato come parametro ROS ma **sovrascritto immediatamente** dal valore YAML. Il rate va cambiato in `sensor_params.yaml:7` |
+| `config/UKF_params.yaml` | **Nessun nodo lo legge.** Il nome inganna: contiene parametri del KF legacy sulle distanze, e alcuni valori divergono da quelli realmente usati in `KF.cpp` (es. `distance_var: 0.001` contro `0.01` effettivo). Modificarlo non fa nulla |
+| `uwb_frequency` (launch arg) | Passato come parametro ROS ma **sovrascritto immediatamente** dal valore YAML. Il rate va cambiato in `config/sensor_params.yaml:7` |
 | `velocity_gains.Kv_*` | **Nessun effetto.** `desired_velocity` è posto a zero e mai aggiornato, quindi il termine derivativo è identicamente nullo. Il controllore è di fatto un PI più un PD separato sull'heading |
 | `Kp_r2`, `Kp_r3`, `Ki_r2`, `Ki_r3`, `Kv_r2`, `Kv_r3` | **Mai letti.** Tutte e tre le istanze leggono i guadagni `_r1` |
 | `Kf` (guadagno di formazione morbida) | Il log all'avvio stampa `Kf=0.50` ma **il valore effettivo è 0.8**: il costruttore sovrascrive quello caricato dallo YAML |
-| `shared_process_noise`, `per_robot.*` | Chiavi presenti in `pose_filter_params.yaml` ma **mai lette** |
-| `adaptive_noise.*` in `UKF_params.yaml` | **Nessun codice di rumore adattivo esiste** da nessuna parte |
+| `shared_process_noise`, `per_robot.*` | Chiavi presenti in `config/pose_filter_params.yaml` ma **mai lette** |
+| `adaptive_noise.*` in `config/UKF_params.yaml` | **Nessun codice di rumore adattivo esiste** da nessuna parte |
 | `worlds/empty_world_highfreq.world` | **Non referenziato da nessun launch file** e non installato. Il mondo usato è `empty_world.world` di `turtlebot3_gazebo` |
 | `src/KF.py` | Reimplementazione Python del KF sulle distanze, **mai lanciata** da nessun launch file |
 | `final_3_robots.sh` | Script legacy di un'iterazione precedente, riferisce topic che non esistono più |
-| Lato della formazione | **Hardcoded a 1.5 m** in `Regulator_node.cpp:103`, non in `controller.yaml` |
+| Lato della formazione | **Hardcoded a 1.5 m** in `Regulator_node.cpp:103`, non in `config/controller.yaml` |
 | Soglie della FSM | Tutte hardcoded: convergenza 0.15 m, debounce 10 cicli, soglia errore tracking 0.2 m |
 | Posizioni di spawn e ritardi | Hardcoded nel launch file: `(0,0)` a 6 s, `(1,0)` a 10 s, `(0,1)` a 13 s |
 
@@ -279,7 +279,7 @@ Cose che sembrano configurabili o significative ma non lo sono:
 ## 7. Vincolo di fattibilità della traiettoria
 
 La velocità tangenziale del riferimento è `v = R · ω`, e il TurtleBot3 burger è limitato a
-**0.22 m/s** (`controller.yaml:17`).
+**0.22 m/s** (`config/controller.yaml:17`).
 
 | R | ω | v tangenziale | Fattibile? |
 |---|---|---|---|

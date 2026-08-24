@@ -160,8 +160,8 @@ Ground truth di riferimento: `/odom` (interpolato a 30→50 Hz).
 
 Il collegamento esplicito rumore in ingresso → precisione in uscita.
 
-- **Tabella rumore configurato vs errore osservato**: σ UWB (`sensor_params.yaml`), σ
-  orientazione IMU e Q di processo (`pose_filter_params.yaml`) affiancati all'RMSE
+- **Tabella rumore configurato vs errore osservato**: σ UWB (`config/sensor_params.yaml`), σ
+  orientazione IMU e Q di processo (`config/pose_filter_params.yaml`) affiancati all'RMSE
   osservato, per configurazione.
 - **`q_diag` / `r_diag` nel tempo**: nella configurazione attuale sono **costanti** per
   tutta la run — dichiararlo esplicitamente come baseline. Il termine di inflazione
